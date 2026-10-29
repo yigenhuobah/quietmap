@@ -1,0 +1,48 @@
+name: 功能建议
+description: 希望新增的净化项、界面调整或功能开关
+title: "[建议] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        功能建议不强制填版本信息，但请说清**具体在哪个页面、哪块内容**。只写「去掉广告」「再精简一点」这类描述很难定位。
+
+        提交前可以先看一眼 README 的「已知限制」一节，部分诉求可能已经在计划外（服务端下发模板、混淆类等）。
+  - type: textarea
+    id: what
+    attributes:
+      label: 希望改什么
+      description: 具体到页面、区域、控件
+      placeholder: |
+        例如：首页搜索页的 XXX 卡片，希望可以隐藏
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: 为什么需要
+      description: 现在哪里影响使用，或者希望达到什么效果
+    validations:
+      required: true
+  - type: input
+    id: target-version
+    attributes:
+      label: 高德地图版本（可选）
+      placeholder: "17.01.0.2012"
+    validations:
+      required: false
+  - type: input
+    id: module-version
+    attributes:
+      label: 模块版本（可选）
+      placeholder: "0.8.2 (11)"
+    validations:
+      required: false
+  - type: textarea
+    id: media
+    attributes:
+      label: 截图或录屏（可选）
+      description: 直接拖进来即可；涉及个人信息的先打码
+    validations:
+      required: false

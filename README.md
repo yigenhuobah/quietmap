@@ -6,7 +6,7 @@
 > 目标应用：**高德地图 17.01.0.2012**（`com.autonavi.minimap`）。
 > 与高德地图官方无任何关联，仅供学习、研究和个人设备使用。
 
-**仓库**：<https://github.com/yigenhuobah/quietmap> ｜ **下载**：[Releases](https://github.com/yigenhuobah/quietmap/releases)
+**仓库**：<https://github.com/yigenhuobah/quietmap> ｜ **下载**：[Releases](https://github.com/yigenhuobah/quietmap/releases) ｜ **反馈**：[Issues](https://github.com/yigenhuobah/quietmap/issues/new/choose)
 
 ## 兼容性
 

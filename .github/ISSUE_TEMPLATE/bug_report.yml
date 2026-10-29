@@ -1,0 +1,93 @@
+name: 问题反馈
+description: 功能不生效、崩溃、界面异常等需要排查的问题
+title: "[问题] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先确认三件事：
+
+        1. 模块已在 LSPosed / Vector 里启用，作用域勾选了高德地图；
+        2. 改过开关后**已重启高德地图**（多数功能重启生效）；
+        3. 已对照 README 的「兼容性」确认高德地图版本在适配范围内（当前为 17.01.0.2012）。
+
+        没有版本信息的 issue 无法定位，下面的字段请尽量填全。
+  - type: input
+    id: module-version
+    attributes:
+      label: 模块版本
+      description: 模块设置页「关于」可见版本名与 versionCode
+      placeholder: "0.8.2 (11)"
+    validations:
+      required: true
+  - type: input
+    id: target-version
+    attributes:
+      label: 高德地图版本
+      description: 系统设置 → 应用信息 → 版本号
+      placeholder: "17.01.0.2012"
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: 设备与系统
+      description: 机型 / 系统版本 / Android 版本
+      placeholder: "Xiaomi 15 / HyperOS 4.0 / Android 17"
+    validations:
+      required: true
+  - type: input
+    id: framework
+    attributes:
+      label: 框架
+      placeholder: "LSPosed 2.2.1 / Vector 2.2"
+    validations:
+      required: true
+  - type: dropdown
+    id: symptom
+    attributes:
+      label: 问题类型
+      options:
+        - 功能不生效（开关已开但没反应）
+        - 崩溃 / 闪退
+        - 高德地图界面异常（白屏、错位、卡死）
+        - 模块设置页异常
+        - 其他
+    validations:
+      required: true
+  - type: input
+    id: feature
+    attributes:
+      label: 受影响功能
+      description: 用设置页里的功能编号；不确定就写大致位置
+      placeholder: "AD-01、UI-06"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从打开应用到问题出现，尽量具体到页面和操作
+      placeholder: |
+        1. 打开高德地图，进入 XXX 页
+        2. 输入目的地开始导航
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: diag
+    attributes:
+      label: 诊断信息
+      description: 模块设置页 → 诊断 → 「复制诊断信息」，粘贴到这里；诊断页完全没有数据时写「诊断页无数据」
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志（可选）
+      description: LSPosed 日志中与本模块相关的部分，或崩溃时的 logcat
+      render: text
+    validations:
+      required: false
