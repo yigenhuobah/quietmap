@@ -1,53 +1,5 @@
 # Changelog
 
-## 0.8.2 - 2026-10-29
-
-诊断与配置可靠性版本（versionCode 11）：收紧诊断通道的进程/会话/权限边界，配置写入改为可验证的异步提交，UI-06 增加页面门控，诊断新增 crit/TTL 语义。功能清单不变，无新增净化项。
-
-### 修复
-
-- **socket peer UID 校验**：`ReportSocketServer` 在接受连接前读取 `LocalSocket#getPeerCredentials`，只接受高德目标进程（`com.autonavi.minimap`）或模块自身的 UID；抽象命名空间 socket 对本机所有应用可见，此前任意应用都能伪造/清空诊断数据。取不到凭据、`getPackagesForUid` 为空或查询异常时一律拒绝（fail-closed），日志记 `qmreport socket reject reason=peer uid`。
-- **UI-06 消息页门控**：`AjxModuleLocalStorage#getItemSync/setItemSync` 的 `recentlyMsgList-*` 缓存除 key 匹配外，还要求当前 `IAjxContext#getJsPath` 为消息页/我的页；页面路径能取到且明确是其他页面时原样放行，避免误伤首页/搜索的 AJX 缓存。路径暂时取不到时保持旧的 key-only 行为，并只告警一次。
-- **子进程隔离**：`Report` 只在目标 App 主进程启动；`:locationservice`、`:widgetProvider` 仍安装各自需要的 hook，但不再回传 reg/skip。`StatusProvider.applyReport` 对非主进程只合并 `hit.`/`entry.`，`reg.`/`skip.`/`crit.` 一律丢弃，避免“子进程缺少 UI 钩子”的 skip 被算成失败。
-- **旧 session 拒绝**：session 改为 `t<启动毫秒>-<uuid>`；`StatusProvider` 遇到启动时间早于已存 session 的迟到批次整批丢弃，不再覆盖或清空新会话数据。文件侧同样按 session 过滤：文件 session 与 prefs 中当前主进程 session 不一致时整份忽略，`lastKnown` 兜底也不会展示上一轮运行的残留数据。
-- **FILE_STALE 不计失败**：`failedFeatureCount` 对 `FILE_STALE` 直接返回 0；过期文件只用于诊断页展示“最近一次数据 + 时间”，不再触发异常横幅。
-- **Config 逐 key 回退**：`Config.readOverrides` 按 key 逐个读取 remote prefs，单个 key 抛异常只回退该 key 的 `defaultEnabled`，整次加载最多告警一次，其余 key 继续读取；不再因为一个坏值放弃全部开关。
-- **ConfigStore 异步 commit**：所有写入提交到单线程 `qm-config-write` 执行器，用 `SharedPreferences.Editor#commit()` 的真实返回值判断是否落盘；remote 不可用时直接返回 false，不再把本地 `apply` 当成写成功。commit 失败时记录最后一次确认提交的值，抵消框架 `RemotePreferences` 内存 map 的乐观更新，避免下一次 refresh 把未落盘的值当成已生效。
-- **legacy group 独立**：新 group `config` 与旧 group `features` 分别获取、互不依赖；读取顺序为新值 → 旧值 → 默认值。新 group 绑定失败时旧配置仍可读，旧 group 只读不写。
-- **设置页后台 I/O**：`ConfigStore` 构造与首次 remote prefs 绑定移到 `qm-settings-config` 后台线程，与状态查询分离；加载完成前开关置灰，查询带代次号，旧查询结果不能覆盖新结果。commit 失败时仅在 UI 仍停留在该值时回滚开关，避免覆盖用户后续操作。
-- **service 死亡重绘**：`ServiceBridge.onServiceDied` 现在也触发重绘，框架断开后设置页立即按 remote 不可用置灰，不再停留在“已激活/可写”的旧状态；重绘回调异常被吞掉，不会反向打断框架回调。
-- **NotifyGuide 精确权限匹配**：`isNotificationPermission` 改为按权限名精确匹配（忽略首尾空白与大小写）：只认 `POST_NOTIFICATIONS`、`NOTIFICATION`、`NOTIFICATION_*`，显式排除 `ACCESS_NOTIFICATION_POLICY`；复合权限串（逗号/分号/竖线/内部空白）一律不命中，避免把多权限引导当成单一通知权限。入参支持 `String`/`String[]`/`Iterable`，未知类型 fail-open 返回 false。
-- **jsPath markNotFound**：UI-06 各挂载点共用 `jsPath` 失败诊断，进程内只上报一次 warning 并 `HookState.markNotFound(f, "jsPath 获取失败")`，诊断页能看到真实 skip 原因，而不是被后续调用反复覆盖。
-- **ReportFileSink 锁失败跳过**：`.lock` 改用非阻塞 `tryLock`，拿不到锁（返回 null 或加锁异常）时本次文件兜底直接返回 false，不再无锁 read-modify-write 覆盖其他进程刚写入的数据；socket/Provider 仍是主通道，失败只记日志。
-- **Phase 5 crit / TTL / 零挂载 critical / 空串清理**：
-  - 新增 `crit.<feature>` 键（合法键 88 → 110）：`Hooks` 在功能安装收尾时，若“零个成功挂载点且至少一条 skip”，调用 `HookState.markNotFoundCritical` 标记整体失效；可选方法缺失仍只写普通 skip，不计入失败横幅。
-  - 失败判定统一收敛到 `ReportProtocol.featureFailed`：已启用、有回传，且 reg 为空或 crit=1 才计入横幅。
-  - TTL：回传超过 10 分钟（`DEFAULT_TTL_MS`）没有新数据时失败计数按“未知”返回 0；主进程内容未变的心跳每 5 分钟刷新一次 `meta.updated_at`，避免运行中的目标进程被误判过期。
-  - 空串清理：`Report.snapshot` 对每个 touched Feature 都发送 reg/skip/crit，缺失时发空串；Provider 以最新值覆盖，目标进程重开后旧 skip/crit 能被清掉。`crit` 合并严格取较新源的值（空串也覆盖），防止旧 `crit=1` 永远清不掉。
-  - 诊断页逐功能摘要新增 `critical` 标记。
-- **check-mounts 缓存指纹**：`tools/check-mounts.sh` 新增 `cache.meta`（路径/大小/mtime/sha256）；`--cache-dir` 复用或同路径替换 APK 时指纹不符即重建缓存，避免把旧包结果当成新包。sha256 计算新增 openssl 兜底，汇总前打印“完整描述符校验”说明。
-
-### 变更
-
-- 诊断合法键由 88 增至 110（22 项 Feature × reg/hit/entry/skip/crit 5 个前缀）。
-- 诊断页单功能摘要格式：`registered · entry N · hit N · skip 原因 · critical`（存在 crit 时追加）。
-- `ServiceBridge` 记录已知边界：`XposedProvider` 由 libxposed 提供且无法插入 `Binder.getCallingUid` 校验，仅做 api>=101 的合理性检查并保持 fail-open；诊断数据通道（Provider/socket）另有 UID 校验。
-- 功能清单不变：22 项，可用 22、blocked 0；挂载点 63 项。
-- 文档：补记 0.8.1 最终 APK 的 SHA-256（仅 CHANGELOG）。
-
-### 验证
-
-- 单测 215 个用例通过（`:app:testDebugUnitTest`，0 失败 / 0 跳过 / 0 错误）。
-- `:app:lintDebug` 通过（22 条 warning、0 error）；`assembleRelease` 通过。
-- `tools/verify-apk.sh` PASS（17 个 `[ok]`、0 失败）：versionCode=11、versionName=0.8.2、签名证书 SHA-256 与 0.8.1 一致。
-- `tools/check-mounts.sh` 对高德 17.01.0.2012（`E:/download/base(4).apk`，aapt2 读出 versionName 17.01.0.2012）共 63 项：OK 63 / SIG 0 / GONE 0。
-- 本轮未做真机回归；UI-05 / AD-12 仍为“挂载点已注册、真实场景未验证”，HyperOS 上 socket 仍不可用（Provider 通道可用）。
-
-APK: `quietmap-0.8.2.apk`
-versionCode: `11`
-大小: `4,077,344 字节`
-SHA-256: `a59d7c8357a290d2ade1b2345456b87159af3ddda84165b7223da397f159259b`
-
 ## 0.8.3 - 2026-10-31
 
 高德 17.02.0.2010 适配版本（versionCode 12）：新增关于页「隐藏桌面图标」开关；随设备高德从 17.01.0.2012 升级到 17.02.0.2010，用 dexsql 重定位 12 个签名漂移的挂载点，63 项挂载点体检 63/63 OK（0 SIG / 0 GONE）。功能清单不变（22 项）。
@@ -97,6 +49,54 @@ APK: `quietmap-0.8.3.apk`
 versionCode: `12`
 大小: `4,082,484 字节`
 SHA-256: `0a08219406a81e1ea32bb512d08a79236c3b7ca7400cb0735c9a4243e403046f`
+
+## 0.8.2 - 2026-10-29
+
+诊断与配置可靠性版本（versionCode 11）：收紧诊断通道的进程/会话/权限边界，配置写入改为可验证的异步提交，UI-06 增加页面门控，诊断新增 crit/TTL 语义。功能清单不变，无新增净化项。
+
+### 修复
+
+- **socket peer UID 校验**：`ReportSocketServer` 在接受连接前读取 `LocalSocket#getPeerCredentials`，只接受高德目标进程（`com.autonavi.minimap`）或模块自身的 UID；抽象命名空间 socket 对本机所有应用可见，此前任意应用都能伪造/清空诊断数据。取不到凭据、`getPackagesForUid` 为空或查询异常时一律拒绝（fail-closed），日志记 `qmreport socket reject reason=peer uid`。
+- **UI-06 消息页门控**：`AjxModuleLocalStorage#getItemSync/setItemSync` 的 `recentlyMsgList-*` 缓存除 key 匹配外，还要求当前 `IAjxContext#getJsPath` 为消息页/我的页；页面路径能取到且明确是其他页面时原样放行，避免误伤首页/搜索的 AJX 缓存。路径暂时取不到时保持旧的 key-only 行为，并只告警一次。
+- **子进程隔离**：`Report` 只在目标 App 主进程启动；`:locationservice`、`:widgetProvider` 仍安装各自需要的 hook，但不再回传 reg/skip。`StatusProvider.applyReport` 对非主进程只合并 `hit.`/`entry.`，`reg.`/`skip.`/`crit.` 一律丢弃，避免“子进程缺少 UI 钩子”的 skip 被算成失败。
+- **旧 session 拒绝**：session 改为 `t<启动毫秒>-<uuid>`；`StatusProvider` 遇到启动时间早于已存 session 的迟到批次整批丢弃，不再覆盖或清空新会话数据。文件侧同样按 session 过滤：文件 session 与 prefs 中当前主进程 session 不一致时整份忽略，`lastKnown` 兜底也不会展示上一轮运行的残留数据。
+- **FILE_STALE 不计失败**：`failedFeatureCount` 对 `FILE_STALE` 直接返回 0；过期文件只用于诊断页展示“最近一次数据 + 时间”，不再触发异常横幅。
+- **Config 逐 key 回退**：`Config.readOverrides` 按 key 逐个读取 remote prefs，单个 key 抛异常只回退该 key 的 `defaultEnabled`，整次加载最多告警一次，其余 key 继续读取；不再因为一个坏值放弃全部开关。
+- **ConfigStore 异步 commit**：所有写入提交到单线程 `qm-config-write` 执行器，用 `SharedPreferences.Editor#commit()` 的真实返回值判断是否落盘；remote 不可用时直接返回 false，不再把本地 `apply` 当成写成功。commit 失败时记录最后一次确认提交的值，抵消框架 `RemotePreferences` 内存 map 的乐观更新，避免下一次 refresh 把未落盘的值当成已生效。
+- **legacy group 独立**：新 group `config` 与旧 group `features` 分别获取、互不依赖；读取顺序为新值 → 旧值 → 默认值。新 group 绑定失败时旧配置仍可读，旧 group 只读不写。
+- **设置页后台 I/O**：`ConfigStore` 构造与首次 remote prefs 绑定移到 `qm-settings-config` 后台线程，与状态查询分离；加载完成前开关置灰，查询带代次号，旧查询结果不能覆盖新结果。commit 失败时仅在 UI 仍停留在该值时回滚开关，避免覆盖用户后续操作。
+- **service 死亡重绘**：`ServiceBridge.onServiceDied` 现在也触发重绘，框架断开后设置页立即按 remote 不可用置灰，不再停留在“已激活/可写”的旧状态；重绘回调异常被吞掉，不会反向打断框架回调。
+- **NotifyGuide 精确权限匹配**：`isNotificationPermission` 改为按权限名精确匹配（忽略首尾空白与大小写）：只认 `POST_NOTIFICATIONS`、`NOTIFICATION`、`NOTIFICATION_*`，显式排除 `ACCESS_NOTIFICATION_POLICY`；复合权限串（逗号/分号/竖线/内部空白）一律不命中，避免把多权限引导当成单一通知权限。入参支持 `String`/`String[]`/`Iterable`，未知类型 fail-open 返回 false。
+- **jsPath markNotFound**：UI-06 各挂载点共用 `jsPath` 失败诊断，进程内只上报一次 warning 并 `HookState.markNotFound(f, "jsPath 获取失败")`，诊断页能看到真实 skip 原因，而不是被后续调用反复覆盖。
+- **ReportFileSink 锁失败跳过**：`.lock` 改用非阻塞 `tryLock`，拿不到锁（返回 null 或加锁异常）时本次文件兜底直接返回 false，不再无锁 read-modify-write 覆盖其他进程刚写入的数据；socket/Provider 仍是主通道，失败只记日志。
+- **Phase 5 crit / TTL / 零挂载 critical / 空串清理**：
+  - 新增 `crit.<feature>` 键（合法键 88 → 110）：`Hooks` 在功能安装收尾时，若“零个成功挂载点且至少一条 skip”，调用 `HookState.markNotFoundCritical` 标记整体失效；可选方法缺失仍只写普通 skip，不计入失败横幅。
+  - 失败判定统一收敛到 `ReportProtocol.featureFailed`：已启用、有回传，且 reg 为空或 crit=1 才计入横幅。
+  - TTL：回传超过 10 分钟（`DEFAULT_TTL_MS`）没有新数据时失败计数按“未知”返回 0；主进程内容未变的心跳每 5 分钟刷新一次 `meta.updated_at`，避免运行中的目标进程被误判过期。
+  - 空串清理：`Report.snapshot` 对每个 touched Feature 都发送 reg/skip/crit，缺失时发空串；Provider 以最新值覆盖，目标进程重开后旧 skip/crit 能被清掉。`crit` 合并严格取较新源的值（空串也覆盖），防止旧 `crit=1` 永远清不掉。
+  - 诊断页逐功能摘要新增 `critical` 标记。
+- **check-mounts 缓存指纹**：`tools/check-mounts.sh` 新增 `cache.meta`（路径/大小/mtime/sha256）；`--cache-dir` 复用或同路径替换 APK 时指纹不符即重建缓存，避免把旧包结果当成新包。sha256 计算新增 openssl 兜底，汇总前打印“完整描述符校验”说明。
+
+### 变更
+
+- 诊断合法键由 88 增至 110（22 项 Feature × reg/hit/entry/skip/crit 5 个前缀）。
+- 诊断页单功能摘要格式：`registered · entry N · hit N · skip 原因 · critical`（存在 crit 时追加）。
+- `ServiceBridge` 记录已知边界：`XposedProvider` 由 libxposed 提供且无法插入 `Binder.getCallingUid` 校验，仅做 api>=101 的合理性检查并保持 fail-open；诊断数据通道（Provider/socket）另有 UID 校验。
+- 功能清单不变：22 项，可用 22、blocked 0；挂载点 63 项。
+- 文档：补记 0.8.1 最终 APK 的 SHA-256（仅 CHANGELOG）。
+
+### 验证
+
+- 单测 215 个用例通过（`:app:testDebugUnitTest`，0 失败 / 0 跳过 / 0 错误）。
+- `:app:lintDebug` 通过（22 条 warning、0 error）；`assembleRelease` 通过。
+- `tools/verify-apk.sh` PASS（17 个 `[ok]`、0 失败）：versionCode=11、versionName=0.8.2、签名证书 SHA-256 与 0.8.1 一致。
+- `tools/check-mounts.sh` 对高德 17.01.0.2012（`E:/download/base(4).apk`，aapt2 读出 versionName 17.01.0.2012）共 63 项：OK 63 / SIG 0 / GONE 0。
+- 本轮未做真机回归；UI-05 / AD-12 仍为“挂载点已注册、真实场景未验证”，HyperOS 上 socket 仍不可用（Provider 通道可用）。
+
+APK: `quietmap-0.8.2.apk`
+versionCode: `11`
+大小: `4,077,344 字节`
+SHA-256: `a59d7c8357a290d2ade1b2345456b87159af3ddda84165b7223da397f159259b`
 
 ## v0.8.1 — 2026-10-28
 
