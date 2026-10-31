@@ -134,6 +134,30 @@ public class FeatureTest {
         assertFalse("非 blocked 项不得保留 blocked 原因", f.blockedReason != null);
     }
 
+    /**
+     * 17.02.0.2010 三个挂载点不可用（复核发现 #85/#93/#106）：PV-03/AD-05 的
+     * 目标方法在全 dex 无调用点（钩子永不命中），AD-03 的数据层钩子拦不住
+     * ShakeButton 传感器触发链。一律 blocked：保留编号与行位、不注册安装器、
+     * 默认关、UI 置灰并显示原因——不再假装有覆盖。
+     */
+    @Test
+    public void deadMountPointsAreBlockedOn1702() {
+        assertEquals("17.02 摇一摇触发链在 ShakeButton 传感器层，SplashButtonInfo 数据层钩子拦不住",
+                Feature.SPLASH_SHAKE.blockedReason);
+        assertEquals("17.02 AfcTkManager#registerTkFlag 无调用点，钩子永不命中",
+                Feature.BG_AFC_TAOKE.blockedReason);
+        assertEquals("17.02 DeviceInfo#installApk 无调用点，真实安装链（Laa0.a）未覆盖",
+                Feature.H5_INSTALL_APK.blockedReason);
+
+        int blocked = 0;
+        for (Feature f : Feature.values()) {
+            if (f.blocked()) {
+                blocked++;
+            }
+        }
+        assertEquals("blocked 集合必须恰好是上述三个死挂载点", 3, blocked);
+    }
+
     private static java.util.List<String> keysInEnumOrder() {
         java.util.List<String> keys = new java.util.ArrayList<>();
         for (Feature f : Feature.values()) {

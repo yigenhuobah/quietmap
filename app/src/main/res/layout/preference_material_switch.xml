@@ -46,11 +46,16 @@
             android:textColor="?android:attr/textColorSecondary" />
     </LinearLayout>
 
+    <!-- clickable=false 会把开关踢出无障碍树（isImportantForAccessibility 只认
+         actionable/listener 节点），TalkBack 就读不到开/关状态；显式 yes 强制保留
+         该节点，MaterialSwitch(SwitchCompat→CompoundButton) 的节点信息自带
+         checkable/checked，状态随 onBindViewHolder 的 setChecked 同步。 -->
     <com.google.android.material.materialswitch.MaterialSwitch
         android:id="@+id/preference_switch"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:clickable="false"
-        android:focusable="false" />
+        android:focusable="false"
+        android:importantForAccessibility="yes" />
 
 </LinearLayout>

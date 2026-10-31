@@ -30,7 +30,6 @@ import io.github.libxposed.service.XposedService;
 public class SettingsFragment extends PreferenceFragmentCompat {
 
     private static final String TAG = "QuietMap";
-    private static final String TARGET = "com.autonavi.minimap";
 
     /** 两次 refresh 的最小间隔，压掉 onCreatePreferences / onResume / 绑定回调三连。 */
     private static final long REFRESH_MIN_INTERVAL_MS = 1000L;
@@ -76,6 +75,11 @@ public class SettingsFragment extends PreferenceFragmentCompat {
     private int mStoreGeneration;
     /** 主线程渲染过的开关值，写失败回滚时不再同步读 remote prefs。 */
     private final Map<String, Boolean> mRenderedValues = new HashMap<>();
+    /**
+     * 每个 key 的写入代次（主线程读写）：失败回滚只认最新一笔写入，
+     * 旧写入的失败回调不得覆盖用户随后拨动的开关值。
+     */
+    private final Map<String, Integer> mWriteGeneration = new HashMap<>();
     /** 失败功能数缓存：-1 表示尚未读取。 */
     private volatile int mFailedCount = -1;
     private volatile long mFailedCountAt;
@@ -166,6 +170,11 @@ public class SettingsFragment extends PreferenceFragmentCompat {
         }
 
         final Activity host = getActivity();
+        // 写入代次：同一 key 的失败回调只有在仍是最新一笔写入时才允许回滚，
+        // 否则旧失败的回滚会覆盖后续（可能已成功）写入的 UI 状态。
+        // 代次只在写入成功排队后生效（见下方 put），被拒绝的写入不得让旧回调失效。
+        Integer lastGeneration = mWriteGeneration.get(f.key);
+        final int generation = (lastGeneration != null ? lastGeneration : 0) + 1;
         boolean scheduled = store.put(f.key, next, committed -> {
             if (committed || host == null) {
                 return;
@@ -174,9 +183,14 @@ public class SettingsFragment extends PreferenceFragmentCompat {
                 if (!isAdded() || getActivity() != host) {
                     return;
                 }
+                Integer latest = mWriteGeneration.get(f.key);
+                if (latest == null || latest != generation) {
+                    // 用户已经又拨动了这个开关：本笔失败的回滚必须让位。
+                    return;
+                }
                 Toast.makeText(requireContext(), R.string.action_write_failed,
                         Toast.LENGTH_SHORT).show();
-                // 只有 UI 仍停在这笔写入的值时才回滚，避免覆盖用户后续操作。
+                // UI 仍停在这笔写入的值时才回滚，避免覆盖用户后续操作。
                 if (Boolean.valueOf(next).equals(mRenderedValues.get(f.key))) {
                     mRenderedValues.put(f.key, previous);
                     Preference p = findPreference(f.key);
@@ -192,6 +206,9 @@ public class SettingsFragment extends PreferenceFragmentCompat {
             return false;
         }
         // 先乐观更新渲染缓存；commit 失败的回调会再拨回去。
+        // 这笔写入自此成为该 key 的最新代次：UI 回调只会晚于当前主线程块执行，
+        // 所以这里先记代次不会与回调竞争。
+        mWriteGeneration.put(f.key, generation);
         mRenderedValues.put(f.key, next);
         return true;
     }
@@ -342,7 +359,7 @@ public class SettingsFragment extends PreferenceFragmentCompat {
             }
             try {
                 List<String> scope = bound.getScope();
-                scoped = scope != null && scope.contains(TARGET);
+                scoped = scope != null && scope.contains(ReportPaths.TARGET_PACKAGE);
             } catch (Throwable ignored) {
             }
             // getRunningTargets 是“当前真的被注入的进程”，只有它命中目标才能说明已激活。
@@ -351,9 +368,8 @@ public class SettingsFragment extends PreferenceFragmentCompat {
             final boolean finalScoped = scoped;
             final boolean finalInjected = injected;
 
-            if (!isAdded() || getActivity() != host) {
-                return;
-            }
+            // isAdded()/getActivity() 是主线程 API（Fragment.mHost/mAdded 非 volatile），
+            // 不能在这个后台线程读；失效结果的丢弃统一交给 runOnUiThread 里的主线程复查。
             host.runOnUiThread(() -> {
                 if (!isAdded() || getActivity() != host) {
                     return;
@@ -454,9 +470,7 @@ public class SettingsFragment extends PreferenceFragmentCompat {
             }
             mFailedCount = failed;
             mFailedCountAt = SystemClock.elapsedRealtime();
-            if (!isAdded() || getActivity() != host) {
-                return;
-            }
+            // 同上：不在后台线程读 isAdded()/getActivity()，交给主线程复查。
             host.runOnUiThread(() -> {
                 if (!isAdded() || getActivity() != host) {
                     return;
@@ -485,7 +499,8 @@ public class SettingsFragment extends PreferenceFragmentCompat {
             }
             for (HookedTarget t : targets) {
                 String name = t.getProcessName();
-                if (name != null && (name.equals(TARGET) || name.startsWith(TARGET + ":"))) {
+                if (name != null && (name.equals(ReportPaths.TARGET_PACKAGE)
+                        || name.startsWith(ReportPaths.TARGET_PACKAGE + ":"))) {
                     return true;
                 }
             }
@@ -494,10 +509,19 @@ public class SettingsFragment extends PreferenceFragmentCompat {
         return false;
     }
 
+    /** 目标版本缓存：getPackageInfo 是主线程同步 PMS 调用，成功后本实例内不再重复查。 */
+    private String mTargetVersion;
+
     private String targetVersion() {
+        if (mTargetVersion != null) {
+            return mTargetVersion;
+        }
         try {
-            PackageInfo pi = requireContext().getPackageManager().getPackageInfo(TARGET, 0);
-            return pi.versionName;
+            PackageInfo pi = requireContext().getPackageManager()
+                    .getPackageInfo(ReportPaths.TARGET_PACKAGE, 0);
+            // 查询失败或目标未安装（versionName 为 null）不缓存：下次 refresh 重试。
+            mTargetVersion = pi.versionName;
+            return mTargetVersion;
         } catch (Throwable t) {
             return null;
         }

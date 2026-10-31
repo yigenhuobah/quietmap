@@ -2,6 +2,7 @@ package com.quietmap.app.hooks;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import com.quietmap.app.Feature;
@@ -41,7 +42,8 @@ public class HooksTest {
             assertFalse("blocked Feature 不应被安装: " + f.id,
                     Hooks.shouldInstall(f, false));
         }
-        // 当前没有 blocked 项；未来新增 blocked 项时同样自动校验这三条规则。
+        // 当前 blocked 项 = AD-03/AD-05/PV-03（17.02 挂载点不可用，见 Feature.blockedReason）；
+        // 未来新增 blocked 项时同样自动校验这三条规则。
     }
 
     @Test
@@ -66,7 +68,15 @@ public class HooksTest {
             }
         }
         assertEquals(expected, Hooks.installerKeys().size());
-        assertEquals(expected, Feature.values().length - countBlocked());
+        // 第二个断言不得再用「同一循环的另一种写法」自证（expected 与
+        // length-countBlocked() 同源恒真，对 installer 没有验证作用）：
+        // 改为逐项对照枚举校验注册表内容——非 blocked 必须注册、blocked 不得
+        // 注册，配合上面的 size 断言可拦住「漏注册 A + 多注册 blocked B」这类
+        // 总数不变但内容不对的回归。
+        for (Feature f : Feature.values()) {
+            assertEquals("installer 注册状态不对: " + f.id + " (" + f.key + ")",
+                    !f.blocked(), Hooks.installerKeys().contains(f));
+        }
     }
 
     @Test
@@ -108,13 +118,35 @@ public class HooksTest {
         assertFalse(HookState.hasCriticalSkip(f));
     }
 
-    private static int countBlocked() {
-        int blocked = 0;
-        for (Feature f : Feature.values()) {
-            if (f.blocked()) {
-                blocked++;
-            }
-        }
-        return blocked;
+    @Test
+    public void retryInstallClearsStaleCriticalOnSuccess() {
+        Feature f = Feature.BG_MSG_FETCH;
+        // 上一轮安装：零挂载 + skip → 整体失效（crit=1）。
+        HookState.markNotFound(f, "类未找到 X");
+        Hooks.markCriticalIfNoMount(f);
+        assertTrue(HookState.hasCriticalSkip(f));
+
+        // QuietMapModule 回滚 sInstalled 后的重试：installOne 先清除上一轮的
+        // skip/crit，再重装；本轮挂载成功后不得继续上报 crit=1。
+        Hooks.installOne(null, null, (m, c) -> HookState.installed(f, "retry#ok"), f);
+        assertFalse("重试成功后不得继续上报 crit=1", HookState.hasCriticalSkip(f));
+        assertNull("重试成功后上一轮的 skip 不得保留", HookState.skipReason(f));
+        assertEquals("本轮挂载正常记账", 1, HookState.installedCount(f));
+    }
+
+    @Test
+    public void retryClearsStaleFailureBeforeInstallerRuns() {
+        Feature f = Feature.HOME_OPERATE_BAR;
+        HookState.markNotFoundCritical(f, "无可用挂载点");
+        assertTrue(HookState.hasCriticalSkip(f));
+
+        final boolean[] cleanAtStart = {false};
+        Hooks.installOne(null, null, (m, c) -> {
+            // 清除必须先于重装：安装器执行时上一轮的 skip/crit 已经不在。
+            cleanAtStart[0] = !HookState.hasCriticalSkip(f) && HookState.skipReason(f) == null;
+        }, f);
+        assertTrue("installOne 必须在重装前清除上一轮的 skip/crit", cleanAtStart[0]);
+        // 本轮零挂载且无 skip：不能沿用上一轮的 critical 结论（本轮无法判定）。
+        assertFalse("上一轮 critical 不得残留", HookState.hasCriticalSkip(f));
     }
 }

@@ -41,9 +41,10 @@ import java.util.concurrent.TimeUnit;
  * StatusProvider 对旧版本子进程回传的 reg./skip. 也会忽略，只合并计数键。
  *
  * session：主进程每次启动生成 "t&lt;启动毫秒&gt;-&lt;uuid&gt;"，随快照一起写入。
- * 同一 session 的旧文件才合并，不同 session 直接替换；StatusProvider 还会
- * 用启动时间拒绝迟到的旧会话，避免旧 skip/reg 被盖上当前时间戳。主进程会把
- * session/是否主进程一并回传，供服务端在新会话开始时清理旧数据。
+ * 同一 session 的旧文件才合并，不同 session 直接替换。session 只做身份比较
+ * （不同即新会话），不比较启动时间：时钟回拨后新会话的时间戳反而更早，接收端
+ * 按毫秒排序会整批拒绝并冻结诊断页。主进程会把 session/是否主进程一并回传，
+ * 供服务端在新会话开始时清理旧数据。
  */
 final class Report {
 
@@ -62,8 +63,10 @@ final class Report {
 
     /**
      * 本主进程运行的唯一标识；跨进程写同一文件时用于判断是否合并。
-     * 前缀 "t&lt;启动毫秒&gt;-" 让 StatusProvider 能识别迟到的旧会话并整批拒绝；
-     * 旧版本的纯 UUID 没有时间戳，仍按“无法排序”兼容处理。
+     * 格式 "t&lt;启动毫秒&gt;-&lt;uuid&gt;"（本模块唯一生成点）：接收端只做身份
+     * 比较，毫秒段仅便于人工排查，不参与“迟到会话”排序；uuid 后缀保证时钟
+     * 回拨/回绕后同毫秒启动的两个进程也是不同会话。旧格式（纯数字/纯 UUID）
+     * 按“不同即新会话”兼容处理。
      */
     static final String SESSION = "t" + System.currentTimeMillis() + "-"
             + UUID.randomUUID();

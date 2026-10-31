@@ -23,6 +23,9 @@ import io.github.libxposed.api.XposedModule;
  * 后续真机验证时把 DEBUG_PROBE 临时改为 true 并重新构建：
  * - 方法探针会跳过 {@link #ALREADY_HOOKED} 中的正式挂载点，因为 Xposed
  *   同一方法只能挂一个 hook；
+ * - 探针只打 PROBE 日志，绝不写 HookState（installed/markNotFound/skip）：
+ *   成功标签记在正式 Feature 名下会掩盖真实的零挂载 critical，类缺失写 skip
+ *   会在诊断页留下假 skip；
  * - 定位完必须改回 false 再提交/发版，不要留在日常构建里。
  */
 final class Batch6Probe {
@@ -58,15 +61,25 @@ final class Batch6Probe {
 
     static void install(XposedModule module, Feature f, ClassLoader cl) {
         if (DEBUG_PROBE) {
-            installMethodProbes(module, f, cl);
-            Log.i(TAG, "PROBE installed for " + Arrays.toString(TARGETS));
+            // f 仅由 MsgCenterHooks.install 传入（签名保持不变）；探针绝不把它写进
+            // HookState，见 installMethodProbes 的说明。
+            installMethodProbes(module, cl);
+            probeLog("PROBE installed for " + Arrays.toString(TARGETS));
         }
     }
 
-    /** 消息中心三个候选类的全部方法：命中打日志后原样 proceed。 */
-    private static void installMethodProbes(XposedModule module, Feature f, ClassLoader cl) {
+    /**
+     * 消息中心三个候选类的全部方法：命中打日志后原样 proceed。
+     *
+     * 探针只做 logcat 观察，绝不写 HookState（installed/markNotFound/skip）：
+     * 探针成功若经 HookKit.install 记成 HookState.installed，会让 MSG_CENTER 的
+     * installedCount &gt; 0，掩盖真实的「零挂载」critical；探针类缺失若经
+     * HookKit.findClass 写成 skip，又会在诊断页留下假的「类未找到」。因此
+     * 定位与挂载都用下面的 probeFindClass / probeInstall 本地实现。
+     */
+    private static void installMethodProbes(XposedModule module, ClassLoader cl) {
         for (String name : TARGETS) {
-            Class<?> cls = HookKit.findClass(module, f, cl, name);
+            Class<?> cls = probeFindClass(cl, name);
             if (cls == null) {
                 continue;
             }
@@ -77,14 +90,57 @@ final class Batch6Probe {
                     }
                     String label = cls.getSimpleName() + "#" + m.getName();
                     if (ALREADY_HOOKED.contains(label)) {
-                        Log.i(TAG, "PROBE skip already hooked " + label);
+                        probeLog("PROBE skip already hooked " + label);
                         continue;
                     }
-                    HookKit.install(module, f, "PROBE" + label, m, methodProbe(label));
+                    probeInstall(module, label, m);
                 } catch (Throwable ignored) {
                     // 单个方法探针失败不影响其余方法
                 }
             }
+        }
+    }
+
+    /** 探针专用类定位：缺失只打 PROBE 日志，不写 HookState（与 HookKit.findClass 的差异点）。 */
+    static Class<?> probeFindClass(ClassLoader cl, String name) {
+        try {
+            return Class.forName(name, false, cl);
+        } catch (Throwable t) {
+            probeWarn("PROBE skip class not found " + name);
+            return null;
+        }
+    }
+
+    /** 探针专用挂载：成功不记 HookState.installed，失败不记 markNotFound，只打 PROBE 日志。 */
+    private static void probeInstall(XposedModule module, String label, Method m) {
+        if (HookKit.isFrameworkClass(m.getDeclaringClass().getName())) {
+            probeWarn("PROBE skip framework class " + label);
+            return;
+        }
+        try {
+            module.hook(m)
+                    .setId("PROBE#" + label)
+                    .setExceptionMode(XposedInterface.ExceptionMode.PROTECTIVE)
+                    .intercept(methodProbe(label));
+            probeLog("PROBE registered " + label);
+        } catch (Throwable t) {
+            probeWarn("PROBE hook failed " + label + ": " + t.getMessage());
+        }
+    }
+
+    private static void probeLog(String msg) {
+        try {
+            Log.i(TAG, msg);
+        } catch (Throwable ignored) {
+            // 单测环境没有 Android Log 实现；日志失败不影响探针
+        }
+    }
+
+    private static void probeWarn(String msg) {
+        try {
+            Log.w(TAG, msg);
+        } catch (Throwable ignored) {
+            // 单测环境没有 Android Log 实现；日志失败不影响探针
         }
     }
 

@@ -31,7 +31,6 @@ import androidx.preference.PreferenceViewHolder;
 public class AboutFragment extends PreferenceFragmentCompat {
 
     private static final String CURRENT_APPLICATION_ID = "io.github.yigenhuobah.quietmap";
-    private static final String TARGET_PACKAGE = "com.autonavi.minimap";
     private static final String SOURCE_URL = "https://github.com/yigenhuobah/quietmap";
     private static final String LICENSE_URL = SOURCE_URL + "/blob/main/LICENSE";
 
@@ -75,7 +74,7 @@ public class AboutFragment extends PreferenceFragmentCompat {
 
         Preference target = info(R.string.about_target,
                 getString(R.string.about_target_value, getString(R.string.app_target_name),
-                        TARGET_PACKAGE, VersionGate.SUPPORTED_VERSION));
+                        ReportPaths.TARGET_PACKAGE, VersionGate.SUPPORTED_VERSION));
         target.setSelectable(false);
         screen.addPreference(target);
 
@@ -228,23 +227,30 @@ public class AboutFragment extends PreferenceFragmentCompat {
         }
     }
 
-    private String versionName() {
-        try {
-            String v = requireContext().getPackageManager()
-                    .getPackageInfo(requireContext().getPackageName(), 0).versionName;
-            return v != null ? v : "?";
-        } catch (Throwable t) {
-            return "?";
+    /** 模块自身 PackageInfo：getPackageInfo 是主线程同步 PMS 调用，versionName/versionCode 只查一次。 */
+    private PackageInfo mSelfInfo;
+
+    /** 查询失败不缓存（下次进入本页重试），成功后本实例内复用。 */
+    private PackageInfo selfPackageInfo() {
+        if (mSelfInfo == null) {
+            try {
+                mSelfInfo = requireContext().getPackageManager()
+                        .getPackageInfo(requireContext().getPackageName(), 0);
+            } catch (Throwable t) {
+                return null;
+            }
         }
+        return mSelfInfo;
+    }
+
+    private String versionName() {
+        PackageInfo pi = selfPackageInfo();
+        String v = pi != null ? pi.versionName : null;
+        return v != null ? v : "?";
     }
 
     private int versionCode() {
-        try {
-            PackageInfo pi = requireContext().getPackageManager()
-                    .getPackageInfo(requireContext().getPackageName(), 0);
-            return (int) pi.getLongVersionCode();
-        } catch (Throwable t) {
-            return 0;
-        }
+        PackageInfo pi = selfPackageInfo();
+        return pi != null ? (int) pi.getLongVersionCode() : 0;
     }
 }

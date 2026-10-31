@@ -54,6 +54,49 @@ public class ReportFileStoreTest {
         assertNotNull(ReportFileStore.readLastKnown(stale));
     }
 
+    /**
+     * 未来时间戳的两个方向：时钟小幅偏快（< 5 分钟容差）不能误判过期，
+     * 远期时间戳（> 5 分钟容差）不能长期保持新鲜。容差分支是
+     * fresh() 里的 age >= -FUTURE_SKEW_MS，mtime 与 updated_at 各查一次；
+     * 三个用例分开放，任一分支被改坏都能独立失败。
+     */
+    @Test
+    public void acceptsSmallFutureSkew() throws Exception {
+        long now = System.currentTimeMillis();
+        // 未来 4 分钟（容差内）：mtime 与内容时间都偏快，仍按新鲜处理。
+        File futureSkew = write("future-skew.json",
+                json(now + 4 * 60_000L, "reg.splash_gate", "x"));
+        assertTrue(futureSkew.setLastModified(now + 4 * 60_000L));
+        assertNotNull("5 分钟内的未来时间戳不能判为过期",
+                ReportFileStore.read(futureSkew, now, ReportFileStore.MAX_AGE_MS));
+    }
+
+    @Test
+    public void rejectsFarFutureMtime() throws Exception {
+        long now = System.currentTimeMillis();
+        // 未来 6 分钟（容差外）：mtime 先被拒，reason 标 stale mtime。
+        File farFutureMtime = write("far-future-mtime.json",
+                json(now, "reg.splash_gate", "x"));
+        assertTrue(farFutureMtime.setLastModified(now + 6 * 60_000L));
+        ReportFileStore.Probe probe = ReportFileStore.probe(
+                farFutureMtime, now, ReportFileStore.MAX_AGE_MS);
+        assertNull(probe.entry);
+        assertTrue(probe.reason, probe.reason.contains("stale mtime"));
+    }
+
+    @Test
+    public void rejectsFarFutureContentTimestamp() throws Exception {
+        long now = System.currentTimeMillis();
+        // 内容时间未来 6 分钟、mtime 正常：命中 stale updated_at 分支。
+        File farFutureContent = write("far-future-content.json",
+                json(now + 6 * 60_000L, "reg.splash_gate", "x"));
+        assertTrue(farFutureContent.setLastModified(now));
+        ReportFileStore.Probe probe = ReportFileStore.probe(
+                farFutureContent, now, ReportFileStore.MAX_AGE_MS);
+        assertNull(probe.entry);
+        assertTrue(probe.reason, probe.reason.contains("stale updated_at"));
+    }
+
     @Test
     public void rejectsStaleMtime() throws Exception {
         long now = System.currentTimeMillis();

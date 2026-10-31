@@ -7,6 +7,7 @@ import static org.junit.Assert.assertTrue;
 
 import com.quietmap.app.Feature;
 import com.quietmap.app.HookState;
+import com.quietmap.app.ReportProtocol;
 
 import org.junit.Test;
 
@@ -55,6 +56,15 @@ public class ReportTest {
     @Test
     public void clockRollbackAllowsOneWrite() {
         assertTrue(Report.fileWriteDue(false, T0 - 1, T0));
+    }
+
+    @Test
+    public void sessionKeepsGenerationContract() {
+        // S1 会话协议：QM 固定 "t<启动毫秒>-<随机 uuid>"，生成点只有这里一处。
+        // 接收端只做身份比较，不解析毫秒；uuid 后缀保证时钟回拨后同毫秒启动的
+        // 两个进程仍是不同会话。
+        assertTrue("session 必须以 t<毫秒>- 开头：" + Report.SESSION,
+                Report.SESSION.matches("t\\d{10,}-\\S+"));
     }
 
     // ---------------------------------------------------------------- 快照
@@ -119,6 +129,39 @@ public class ReportTest {
         assertFalse("entryCount 为 0 时不上报 entry 键",
                 batch.containsKey("entry." + f.key));
         assertEquals("sendList", batch.get("reg." + f.key));
+    }
+
+    /**
+     * reg/skip 超长时必须截断到协议上限：StatusProvider/ReportProtocol 对
+     * 超过 MAX_VALUE(=256) 的值会整键丢弃（isValidValue 直接 continue），
+     * 截断一旦失效，诊断页会静默丢字段而其它用例仍是短字符串、照常全绿。
+     * 用 OPS_ACTIVITY：全测试目录没有其它用例碰它的 HookState，避免静态状态串扰。
+     */
+    @Test
+    public void snapshotTruncatesLongRegAndSkipToProtocolMax() {
+        Feature f = Feature.OPS_ACTIVITY;
+        String longLabel = repeat('r', ReportProtocol.MAX_VALUE + 100);
+        String longSkip = repeat('s', ReportProtocol.MAX_VALUE + 100);
+        HookState.installed(f, longLabel);
+        HookState.markNotFound(f, longSkip);
+
+        Map<String, String> batch = Report.snapshot();
+        String reg = batch.get("reg." + f.key);
+        String skip = batch.get("skip." + f.key);
+        assertEquals("reg 超长必须截断到协议上限", ReportProtocol.MAX_VALUE, reg.length());
+        assertEquals("reg 必须保留前缀", longLabel.substring(0, ReportProtocol.MAX_VALUE),
+                reg);
+        assertEquals("skip 超长必须截断到协议上限", ReportProtocol.MAX_VALUE, skip.length());
+        assertEquals("skip 必须保留前缀", longSkip.substring(0, ReportProtocol.MAX_VALUE),
+                skip);
+    }
+
+    private static String repeat(char c, int count) {
+        StringBuilder sb = new StringBuilder(count);
+        for (int i = 0; i < count; i++) {
+            sb.append(c);
+        }
+        return sb.toString();
     }
 
     // ---------------------------------------------------------------- 通道顺序

@@ -12,6 +12,7 @@ import java.io.File;
 import javax.xml.parsers.DocumentBuilderFactory;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -107,8 +108,47 @@ public class LauncherIconTest {
                 ".MainActivity",
                 alias.getAttributeNS(ANDROID_NS, "targetActivity"));
 
+        // MainActivity 自身只有 MAIN+MODULE_SETTINGS，没有 LAUNCHER：alias 丢掉
+        // 桌面 intent-filter 后，桌面将没有任何本模块图标，“隐藏图标”隐藏的
+        // 只是一个不存在的入口。
+        assertTrue("alias 必须自带 MAIN/LAUNCHER intent-filter，否则桌面没有入口",
+                hasLauncherIntentFilter(alias));
+
+        // alias 默认不得禁用：android:enabled="false" 会让图标从安装起就消失，
+        // 与上一条同为桌面入口成立的前提（属性缺省时系统按启用处理，不算禁用）。
+        assertFalse("alias 不能默认禁用（android:enabled=\"false\"）",
+                "false".equals(alias.getAttributeNS(ANDROID_NS, "enabled")));
+
         assertTrue("MainActivity 必须保留 MODULE_SETTINGS 入口，否则隐藏图标后无法从 LSPosed 管理器恢复",
                 hasModuleSettingsEntry(doc));
+    }
+
+    /** 同一个 intent-filter 内必须同时有 MAIN action 与 LAUNCHER category。 */
+    private static boolean hasLauncherIntentFilter(Element alias) {
+        NodeList filters = alias.getElementsByTagName("intent-filter");
+        for (int i = 0; i < filters.getLength(); i++) {
+            Element filter = (Element) filters.item(i);
+            boolean main = false;
+            boolean launcher = false;
+            NodeList actions = filter.getElementsByTagName("action");
+            for (int j = 0; j < actions.getLength(); j++) {
+                if ("android.intent.action.MAIN".equals(
+                        ((Element) actions.item(j)).getAttributeNS(ANDROID_NS, "name"))) {
+                    main = true;
+                }
+            }
+            NodeList categories = filter.getElementsByTagName("category");
+            for (int j = 0; j < categories.getLength(); j++) {
+                if ("android.intent.category.LAUNCHER".equals(
+                        ((Element) categories.item(j)).getAttributeNS(ANDROID_NS, "name"))) {
+                    launcher = true;
+                }
+            }
+            if (main && launcher) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean hasModuleSettingsEntry(Document doc) {

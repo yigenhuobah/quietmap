@@ -22,16 +22,10 @@ import java.util.concurrent.Executors;
  * 所有写入统一提交到单线程执行器，并用 {@link SharedPreferences.Editor#commit()}
  * 的真实返回值判断是否成功。remote 不可用时直接返回 false，不再把本地
  * apply 当成“写成功”。
- *
- * <p>旧配置兜底：新 group {@code config} 与旧 group {@code features} 独立获取。
- * 即使新 group 绑定失败，也会尝试旧 group；读取顺序为新值 → 旧值 → 默认值。
  */
 final class ConfigStore {
 
     private static final String TAG = "QuietMap";
-
-    /** 旧版本可能使用的 remote prefs group；只读兜底，不再写入。 */
-    static final String LEGACY_GROUP = "features";
 
     /**
      * 写入串行执行器：同一 key 的多次切换按提交顺序落盘，
@@ -59,7 +53,6 @@ final class ConfigStore {
     }
 
     private final Store mNewStore;
-    private final Store mLegacyStore;
     private final boolean mRemote;
 
     /**
@@ -72,8 +65,6 @@ final class ConfigStore {
 
     ConfigStore(Context context) {
         SharedPreferences remote = ServiceBridge.remotePreferences(Config.GROUP);
-        // 旧 group 必须独立获取：新 group 绑定失败时，旧配置仍可能可读。
-        SharedPreferences legacyRemote = ServiceBridge.remotePreferences(LEGACY_GROUP);
 
         Context app = context;
         if (context != null) {
@@ -83,30 +74,21 @@ final class ConfigStore {
             }
         }
         SharedPreferences local = null;
-        SharedPreferences legacyLocal = null;
         if (app != null) {
             try {
                 local = app.getSharedPreferences(Config.GROUP, Context.MODE_PRIVATE);
             } catch (Throwable t) {
                 logW("local prefs unavailable", t);
             }
-            try {
-                legacyLocal = app.getSharedPreferences(LEGACY_GROUP, Context.MODE_PRIVATE);
-            } catch (Throwable t) {
-                logW("legacy local prefs unavailable", t);
-            }
         }
 
         mRemote = remote != null;
         mNewStore = prefsStore(remote != null ? remote : local);
-        // 旧 group 的 remote/local 选择与新 group 是否可用无关。
-        mLegacyStore = prefsStore(legacyRemote != null ? legacyRemote : legacyLocal);
     }
 
-    /** 纯 JVM 测试入口：注入两个存储与 remote 可用性。 */
-    ConfigStore(Store newStore, Store legacyStore, boolean remote) {
+    /** 纯 JVM 测试入口：注入存储与 remote 可用性。 */
+    ConfigStore(Store newStore, boolean remote) {
         mNewStore = newStore;
-        mLegacyStore = legacyStore;
         mRemote = remote;
     }
 
@@ -116,13 +98,13 @@ final class ConfigStore {
     }
 
     /**
-     * 新 group 优先 → 旧 group 兜底 → 默认值。
-     * 两个存储的读取互相独立：新 group 读取失败不会跳过旧 group。
+     * 读取开关值：remote/local 同一份 group（{@link Config#GROUP}），缺键回默认值。
+     * 曾有的 "features" 旧 group 兜底已删除——本仓库自 v0.1.0 起只写过
+     * group "config"，旧兜底永不命中却让每次构造多两次框架调用。
      */
     boolean get(String key, boolean def) {
-        Boolean newValue = readCommitted(key);
-        Boolean legacyValue = readQuietly(mLegacyStore, key);
-        return resolve(newValue, legacyValue, def);
+        Boolean value = readCommitted(key);
+        return value != null ? value : def;
     }
 
     /**
@@ -137,9 +119,18 @@ final class ConfigStore {
         }
         try {
             WRITE_EXECUTOR.execute(() -> {
-                // 先记下写前已确认的值：commit 失败时用它抵消 RemotePreferences
-                // 内部 map 的乐观更新。
-                Boolean before = readQuietly(mNewStore, key);
+                // 失败回滚必须用“最近一次确认落盘的值”。该 key 已有过失败记录时，
+                // RemotePreferences 的内存 map 已被乐观更新污染（doUpdate 先于
+                // doCommit），再读 store 会把从未落盘的值当成已确认值，连续两次
+                // 失败就会滚回到一个目标进程根本读不到的状态；此时只能沿用已记录
+                // 的确认值。没有记录说明 store 对该 key 仍是干净的，读到的即已落盘值。
+                Boolean before;
+                if (mCommittedAbsent.contains(key)) {
+                    before = null;
+                } else {
+                    Boolean confirmed = mCommittedFallback.get(key);
+                    before = confirmed != null ? confirmed : readQuietly(mNewStore, key);
+                }
                 boolean committed = false;
                 try {
                     committed = mNewStore.put(key, value);
@@ -177,17 +168,6 @@ final class ConfigStore {
     /** 纯决策：store 缺失或 service 换绑时必须重建。 */
     static boolean needsRebuild(boolean hasStore, boolean sameService) {
         return !hasStore || !sameService;
-    }
-
-    /** 纯决策：新值 > 旧值 > 默认值。 */
-    static boolean resolve(Boolean newValue, Boolean legacyValue, boolean defaultValue) {
-        if (newValue != null) {
-            return newValue;
-        }
-        if (legacyValue != null) {
-            return legacyValue;
-        }
-        return defaultValue;
     }
 
     private static Boolean readQuietly(Store store, String key) {

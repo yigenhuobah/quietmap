@@ -15,27 +15,26 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /**
  * ConfigStore 的纯 JVM 决策：
  * remote 不可用必须拒绝写入、commit 失败必须上报、
- * 旧 group 独立兜底、store 复用条件。
+ * 缺键/读取失败回默认值、store 复用条件。
+ * （曾有的 "features" 旧 group 兜底已随死代码删除：本仓库从未写过该 group。）
  */
 public class ConfigStoreTest {
 
     @Test
     public void remoteUnavailableRejectsWrite() {
         FakeStore newStore = new FakeStore();
-        FakeStore legacy = new FakeStore();
-        ConfigStore store = new ConfigStore(newStore, legacy, false);
+        ConfigStore store = new ConfigStore(newStore, false);
 
         assertFalse("remote 不可用时 put 必须返回 false",
                 store.put(Feature.SPLASH_GATE.key, true, null));
         assertEquals("remote 不可用时不得写新 group", 0, newStore.puts);
-        assertEquals("remote 不可用时不得写旧 group", 0, legacy.puts);
     }
 
     @Test
     public void commitSuccessReportedToCallback() throws Exception {
         FakeStore newStore = new FakeStore();
         newStore.commitResult = true;
-        ConfigStore store = new ConfigStore(newStore, null, true);
+        ConfigStore store = new ConfigStore(newStore, true);
 
         Result result = writeAndWait(store, Feature.SPLASH_GATE.key, true);
 
@@ -49,7 +48,7 @@ public class ConfigStoreTest {
     public void commitFailureReportedToCallback() throws Exception {
         FakeStore newStore = new FakeStore();
         newStore.commitResult = false;
-        ConfigStore store = new ConfigStore(newStore, null, true);
+        ConfigStore store = new ConfigStore(newStore, true);
 
         Result result = writeAndWait(store, Feature.SPLASH_GATE.key, true);
 
@@ -62,7 +61,7 @@ public class ConfigStoreTest {
         FakeStore newStore = new FakeStore();
         newStore.values.put(Feature.SPLASH_GATE.key, true);
         newStore.commitResult = false;
-        ConfigStore store = new ConfigStore(newStore, null, true);
+        ConfigStore store = new ConfigStore(newStore, true);
 
         Result result = writeAndWait(store, Feature.SPLASH_GATE.key, false);
 
@@ -77,7 +76,7 @@ public class ConfigStoreTest {
     public void commitFailureForAbsentKeyDoesNotLeakValue() throws Exception {
         FakeStore newStore = new FakeStore();
         newStore.commitResult = false;
-        ConfigStore store = new ConfigStore(newStore, null, true);
+        ConfigStore store = new ConfigStore(newStore, true);
 
         writeAndWait(store, Feature.SPLASH_GATE.key, true);
 
@@ -86,42 +85,64 @@ public class ConfigStoreTest {
     }
 
     @Test
-    public void legacyGroupIsUsedWhenNewGroupMissing() {
-        FakeStore legacy = new FakeStore();
-        legacy.values.put(Feature.SPLASH_GATE.key, true);
-        // newStore=null 模拟新 group config 绑定失败，remote=false 表示不能写。
-        ConfigStore store = new ConfigStore(null, legacy, false);
+    public void consecutiveCommitFailuresRollBackToLastConfirmedValue() throws Exception {
+        FakeStore newStore = new FakeStore();
+        // 已落盘的初始值 true（此前成功写入过）。
+        newStore.values.put(Feature.SPLASH_GATE.key, true);
+        newStore.commitResult = false;
+        ConfigStore store = new ConfigStore(newStore, true);
 
-        assertTrue("新 group 绑定失败时旧 group 仍要兜底",
+        writeAndWait(store, Feature.SPLASH_GATE.key, false);
+        writeAndWait(store, Feature.SPLASH_GATE.key, true);
+
+        // 修复前：第二次失败从被乐观更新污染的 map 里读到 false，把它当成
+        // “已确认值”，get() 返回从未落盘的 false。
+        assertTrue("连续两次失败后必须仍是最近一次确认落盘的值",
                 store.get(Feature.SPLASH_GATE.key, false));
     }
 
     @Test
-    public void newGroupWinsOverLegacy() {
+    public void consecutiveFailuresOnAbsentKeyNeverLeakValue() throws Exception {
         FakeStore newStore = new FakeStore();
-        newStore.values.put(Feature.SPLASH_GATE.key, false);
-        FakeStore legacy = new FakeStore();
-        legacy.values.put(Feature.SPLASH_GATE.key, true);
-        ConfigStore store = new ConfigStore(newStore, legacy, true);
+        newStore.commitResult = false;
+        ConfigStore store = new ConfigStore(newStore, true);
 
-        assertFalse(store.get(Feature.SPLASH_GATE.key, true));
+        writeAndWait(store, Feature.SPLASH_GATE.key, true);
+        writeAndWait(store, Feature.SPLASH_GATE.key, false);
+
+        assertFalse("key 从未成功落盘，连续失败后不得把乐观写入的值当已生效",
+                store.get(Feature.SPLASH_GATE.key, false));
     }
 
     @Test
-    public void readFailureFallsBackToLegacy() {
+    public void consecutiveFailuresAfterSuccessKeepCommittedValue() throws Exception {
+        FakeStore newStore = new FakeStore();
+        ConfigStore store = new ConfigStore(newStore, true);
+
+        writeAndWait(store, Feature.SPLASH_GATE.key, true);
+
+        newStore.commitResult = false;
+        writeAndWait(store, Feature.SPLASH_GATE.key, false);
+        writeAndWait(store, Feature.SPLASH_GATE.key, false);
+
+        assertTrue("成功提交后的连续失败也必须滚回该已提交值",
+                store.get(Feature.SPLASH_GATE.key, false));
+    }
+
+    @Test
+    public void readFailureFallsBackToDefault() {
         FakeStore newStore = new FakeStore();
         newStore.throwOnGet = true;
-        FakeStore legacy = new FakeStore();
-        legacy.values.put(Feature.SPLASH_GATE.key, true);
-        ConfigStore store = new ConfigStore(newStore, legacy, true);
+        ConfigStore store = new ConfigStore(newStore, true);
 
-        assertTrue("新 group 读取异常时旧 group 继续兜底",
+        assertFalse("读取异常时必须回默认值，不得抛出",
                 store.get(Feature.SPLASH_GATE.key, false));
+        assertTrue(store.get(Feature.SPLASH_GATE.key, true));
     }
 
     @Test
-    public void absentInBothUsesDefault() {
-        ConfigStore store = new ConfigStore(new FakeStore(), new FakeStore(), true);
+    public void absentUsesDefault() {
+        ConfigStore store = new ConfigStore(new FakeStore(), true);
 
         assertTrue(store.get(Feature.SPLASH_GATE.key, true));
         assertFalse(store.get(Feature.SPLASH_GATE.key, false));
@@ -132,14 +153,6 @@ public class ConfigStoreTest {
         assertTrue("没有 store 时必须重建", ConfigStore.needsRebuild(false, true));
         assertTrue("service 换绑时必须重建", ConfigStore.needsRebuild(true, false));
         assertFalse("同一 service 且已有 store 时复用", ConfigStore.needsRebuild(true, true));
-    }
-
-    @Test
-    public void resolveOrderIsNewThenLegacyThenDefault() {
-        assertFalse(ConfigStore.resolve(false, true, true));
-        assertTrue(ConfigStore.resolve(null, true, false));
-        assertFalse(ConfigStore.resolve(null, null, false));
-        assertTrue(ConfigStore.resolve(null, null, true));
     }
 
     private static Result writeAndWait(ConfigStore store, String key, boolean value)

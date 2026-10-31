@@ -23,7 +23,6 @@ import io.github.libxposed.api.XposedModuleInterface;
 public class QuietMapModule extends XposedModule {
 
     static final String TAG = "QuietMap";
-    static final String TARGET_PACKAGE = "com.autonavi.minimap";
 
     /** 每个进程只安装一次；onPackageReady 对进程内每个已加载包都会回调。 */
     private static final AtomicBoolean sInstalled = new AtomicBoolean();
@@ -60,7 +59,7 @@ public class QuietMapModule extends XposedModule {
      */
     @Override
     public void onPackageReady(@NonNull XposedModuleInterface.PackageReadyParam param) {
-        if (!TARGET_PACKAGE.equals(param.getPackageName())) {
+        if (!ReportPaths.TARGET_PACKAGE.equals(param.getPackageName())) {
             return;
         }
         if (!sInstalled.compareAndSet(false, true)) {
@@ -68,7 +67,7 @@ public class QuietMapModule extends XposedModule {
             return;
         }
         // 主进程名就是包名；:locationservice / :widgetProvider 等子进程不是。
-        boolean mainProcess = TARGET_PACKAGE.equals(sProcessName);
+        boolean mainProcess = ReportPaths.TARGET_PACKAGE.equals(sProcessName);
         log(Log.INFO, TAG, "package ready: " + param.getPackageName()
                 + " first=" + param.isFirstPackage()
                 + " process=" + sProcessName

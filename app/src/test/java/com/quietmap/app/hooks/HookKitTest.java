@@ -6,14 +6,19 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import com.quietmap.app.Feature;
+import com.quietmap.app.HookState;
+
 import org.junit.Test;
 
 import java.lang.reflect.Method;
+import java.util.concurrent.Executor;
 
 /**
- * HookKit 的纯 JVM 逻辑：框架类黑名单 + 反射定位。
- * 只测不依赖 Xposed 框架实例的静态方法；install/hit/skipVoid 需要
- * XposedModule，JVM 单测无法构造，故不在覆盖范围内。
+ * HookKit 的纯 JVM 逻辑：框架类黑名单 + 反射定位 + DexKit 延迟兜底收口。
+ * install/hit/skipVoid 的命中路径需要 XposedModule，JVM 单测无法构造；
+ * 延迟兜底（{@link HookKit#finishLateAnchor}）与日志出口对 null module 容忍，
+ * 可在 JVM 上覆盖 miss 收口与「每 Feature 只提交一次」契约。
  */
 public class HookKitTest {
 
@@ -79,5 +84,58 @@ public class HookKitTest {
     public void findMethodQuietReturnsNullForNullClass() {
         assertNull("cls 为 null 时应返回 null",
                 HookKit.findMethodQuiet((Class<?>) null, "m", int.class));
+    }
+
+    /**
+     * install(null Method) 的失败必须进入 HookState：写入与 findMethod 同形的 skip
+     * 原因后，「零挂载 + 无 skip」的功能就能被 Hooks.markCriticalIfNoMount 判为
+     * 整体失效，不再静默。XposedModule 在 JVM 上无法构造，这里按代码库惯例只测
+     * 原因形状与状态机（install 体内的 warn 调用不在此覆盖范围）。
+     */
+    @Test
+    public void nullMethodSkipReasonFeedsCriticalDetection() {
+        Feature f = Feature.HOME_MSG_FILTER;
+        assertEquals("方法未找到 X#m", HookKit.nullMethodSkipReason("X#m"));
+
+        HookState.markNotFound(f, HookKit.nullMethodSkipReason("X#m"));
+        assertFalse("单条 skip 不应直接 critical", HookState.hasCriticalSkip(f));
+        Hooks.markCriticalIfNoMount(f);
+        assertTrue("install(null) 记录 skip 后，零挂载功能必须能判 crit（消除静默失效）",
+                HookState.hasCriticalSkip(f));
+    }
+
+    /**
+     * 延迟兜底的 miss 收口：anchors 全空时 findMethod 直接返回 null（不触 DexKit
+     * native），任务必须记 skip 并按 {@link Hooks#markCriticalIfNoMount} 判整体失效，
+     * 与同步路径的失败语义一致（零挂载时 skip 统一改写为「无可用挂载点」）。
+     */
+    @Test
+    public void lateAnchorMissRecordsSkipAndCritical() {
+        Feature f = Feature.SPLASH_REQUEST;
+        HookKit.finishLateAnchor(null, f, "X#m", null, null, "m",
+                void.class, new Class<?>[0], new String[0]);
+        assertEquals("无可用挂载点", HookState.skipReason(f));
+        assertTrue("零挂载 + skip 必须整体失效", HookState.hasCriticalSkip(f));
+    }
+
+    /**
+     * 延迟兜底的幂等契约：同一 Feature 只提交一次。installAll 重试（安装抛错后
+     * 回滚 sInstalled）不得重复排队任务、重复落钩。
+     */
+    @Test
+    public void lateAnchorSubmitsOnlyOncePerFeature() {
+        Executor previous = HookKit.sDexKitLateExecutor;
+        HookKit.sDexKitLateExecutor = Runnable::run;
+        try {
+            Feature f = Feature.SPLASH_GATE;
+            assertTrue("首次提交应成功（同步执行器内联跑完 miss 收口）",
+                    HookKit.installByAnchorLate(null, f, "Y#m", null, null, "m",
+                            void.class, new Class<?>[0], new String[0]));
+            assertFalse("同一 Feature 第二次提交必须被忽略",
+                    HookKit.installByAnchorLate(null, f, "Y#m", null, null, "m",
+                            void.class, new Class<?>[0], new String[0]));
+        } finally {
+            HookKit.sDexKitLateExecutor = previous;
+        }
     }
 }

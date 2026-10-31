@@ -22,8 +22,11 @@ public final class ReportPaths {
     public static final String FILE_NAME = "qm_report.json";
     public static final String TEMP_SUFFIX = ".tmp";
 
-    /** 与 applicationId / StatusProvider.AUTHORITY 前缀保持一致。 */
-    public static final String MODULE_PACKAGE = "io.github.yigenhuobah.quietmap";
+    /**
+     * 目标包名的全仓唯一声明：文件路径、socket peer 校验（StatusProvider/
+     * ReportSocketServer）、模块入口包名过滤（QuietMapModule）与设置/关于页
+     * 统一引用本常量，避免多处字面量「改一处漏一处」让某条通道静默失效。
+     */
     public static final String TARGET_PACKAGE = "com.autonavi.minimap";
 
     private ReportPaths() {

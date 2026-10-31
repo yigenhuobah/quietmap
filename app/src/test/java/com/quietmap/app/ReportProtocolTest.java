@@ -192,29 +192,66 @@ public class ReportProtocolTest {
                 ReportProtocol.isFresh(now - ttl, now, ttl));
         assertFalse("超过 TTL 视为过期",
                 ReportProtocol.isFresh(now - ttl - 1L, now, ttl));
-        assertTrue("时钟回拨按新鲜处理",
+        assertTrue("小幅时钟偏差（5 分钟内）按新鲜处理",
                 ReportProtocol.isFresh(now + 60_000L, now, ttl));
         assertFalse("ttl <= 0 一律过期", ReportProtocol.isFresh(now, now, 0L));
     }
 
     @Test
-    public void isStaleSessionRejectsEarlierOrTimestamplessIncoming() {
-        assertFalse("还没有已存会话时不拒绝",
-                ReportProtocol.isStaleSession(null, "t1000-a"));
-        assertFalse(ReportProtocol.isStaleSession("", "t1000-a"));
-        assertTrue("更早启动的会话整批拒绝",
-                ReportProtocol.isStaleSession("t2000-a", "t1999-b"));
-        assertFalse("更晚启动的会话是新会话",
-                ReportProtocol.isStaleSession("t2000-a", "t2001-b"));
-        assertFalse("同一启动毫秒按不同实例处理（由 shouldResetSession 清空）",
-                ReportProtocol.isStaleSession("t2000-a", "t2000-b"));
-        assertTrue("旧客户端没有时间戳时视为迟到",
-                ReportProtocol.isStaleSession("t2000-a", "uuid-only"));
-        assertTrue(ReportProtocol.isStaleSession("t2000-a", null));
-        assertFalse("已存会话没有时间戳时无法排序，保持兼容",
-                ReportProtocol.isStaleSession("uuid-only", "t1999-b"));
-        assertFalse("全数字 UUID 不得被误读成时间戳",
-                ReportProtocol.isStaleSession("12345678-1234-5678", "t1-b"));
+    public void isFreshRejectsFutureTimestampsBeyondSkewWindow() {
+        long now = 1_000_000L;
+        long ttl = ReportProtocol.DEFAULT_TTL_MS;
+        assertTrue("未来偏差恰好在容忍窗口边界仍算新鲜",
+                ReportProtocol.isFresh(now + ReportProtocol.MAX_FUTURE_SKEW_MS, now, ttl));
+        assertFalse("未来时间戳超过 5 分钟视为过期（时钟回拨）",
+                ReportProtocol.isFresh(now + ReportProtocol.MAX_FUTURE_SKEW_MS + 1L,
+                        now, ttl));
+        assertFalse("回拨 30 天的旧数据不再当新鲜",
+                ReportProtocol.isFresh(now + 30L * 24 * 60 * 60 * 1000L, now, ttl));
+    }
+
+    @Test
+    public void sessionIdentityComparisonIgnoresTimestampOrder() {
+        // 会话按“身份”比较：不同字符串即新会话（主进程清空旧数据），不比较启动毫秒。
+        // 设备时钟回拨后新会话的时间戳比已存值更早，也不得当成“迟到的旧会话”。
+        assertTrue("时间戳更早的新会话仍是新会话（时钟回拨场景）",
+                ReportProtocol.shouldResetSession("t2000-a", "t1999-b", true));
+        assertTrue("时间戳更晚的新会话是新会话",
+                ReportProtocol.shouldResetSession("t2000-a", "t2001-b", true));
+        assertFalse("session 相同 = 同进程重复上报，不得清空已合并数据",
+                ReportProtocol.shouldResetSession("t2000-a", "t2000-a", true));
+        assertTrue("同一启动毫秒的不同实例（uuid 后缀不同）是不同会话",
+                ReportProtocol.shouldResetSession("t2000-a", "t2000-b", true));
+    }
+
+    @Test
+    public void oldFormatSessionsAreTreatedByIdentityOnly() {
+        // 旧格式（纯数字/纯 UUID）没有随机后缀，也不解析时间戳：不同即新会话，
+        // 相同即同进程；不存在“无法排序就整批拒绝”的路径。
+        assertTrue(ReportProtocol.shouldResetSession("t2000-a", "1650000000000", true));
+        assertTrue(ReportProtocol.shouldResetSession("1650000000000", "t2000-a", true));
+        assertTrue(ReportProtocol.shouldResetSession("old-plain-uuid", "t2000-b", true));
+        assertFalse(ReportProtocol.shouldResetSession("1650000000000",
+                "1650000000000", true));
+        assertFalse("空/缺 session 只合并不清理",
+                ReportProtocol.shouldResetSession("t2000-a", null, true)
+                        || ReportProtocol.shouldResetSession("t2000-a", "", true));
+    }
+
+    @Test
+    public void repeatedReportsFromSameSessionKeepMergedState() {
+        // 同会话重复上报（60 秒心跳）：首次清空后，后续每批都必须原位合并。
+        assertTrue("首次回传清理旧会话",
+                ReportProtocol.shouldResetSession(null, "t1000-abc", true));
+        for (int i = 0; i < 3; i++) {
+            assertFalse("同会话第 " + (i + 2) + " 批不得再清空",
+                    ReportProtocol.shouldResetSession("t1000-abc", "t1000-abc", true));
+        }
+        // 计数合并同样不受“迟到”判定影响：同 key 重复上报只按取大合并。
+        assertFalse("相同计数不触发写入",
+                ReportProtocol.valueChanged("hit.splash_gate", "5", "5"));
+        assertTrue("更大计数正常合并",
+                ReportProtocol.valueChanged("hit.splash_gate", "5", "6"));
     }
 
     @Test

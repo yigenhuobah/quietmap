@@ -33,8 +33,10 @@ import java.util.concurrent.Executors;
  * skip.bg_msg_fetch / crit.bg_msg_fetch，value 对应注册标签、命中计数、
  * 入口计数、跳过原因与整体失效标记。
  *
- * 会话语义：新主进程 session 首次写入前清掉上一会话数据；迟到的旧会话整批
- * 丢弃。超过 {@link #REPORT_TTL_MS} 没有新回传的数据视为过期，失败计数按 0。
+ * 会话语义：新主进程 session 首次写入前清掉上一会话数据。session 只做身份
+ * 比较（不同即新会话），不比较启动毫秒——时钟回拨后新会话的时间戳反而更早，
+ * 按毫秒排序会把新会话整批丢弃并冻结诊断页。超过 {@link #REPORT_TTL_MS}
+ * 没有新回传的数据视为过期，失败计数按 0。
  */
 public final class StatusProvider extends ContentProvider {
 
@@ -66,9 +68,6 @@ public final class StatusProvider extends ContentProvider {
 
     /** 落盘时统一加 "v:" 前缀，避免与旧版本可能存在的同名键冲突。 */
     private static final String VALUE_PREFIX = "v:";
-
-    /** 唯一允许写入诊断数据的宿主包名。 */
-    static final String TARGET_PACKAGE = "com.autonavi.minimap";
 
     private static final int MAX_ITEMS = 800;
 
@@ -148,7 +147,7 @@ public final class StatusProvider extends ContentProvider {
      * 诊断数据落到 SharedPreferences 的唯一入口：Provider.call 与
      * {@link ReportSocketServer} 共用，保证两条通道的合并语义一致
      * （hit/entry 取历史最大、reg/skip/crit 最新值覆盖、主进程新 session
-     * 清理旧数据、迟到的旧会话整批拒绝）。
+     * 清理旧数据；session 按身份比较，不比较启动时间）。
      *
      * 进程边界：非主进程只允许合并 hit./entry.，reg./skip./crit. 直接丢弃。
      * Report 现在只在主进程启动，这里兜住旧版本子进程仍在上报的数据，
@@ -168,11 +167,9 @@ public final class StatusProvider extends ContentProvider {
         }
         SharedPreferences sp = context.getSharedPreferences(PREFS, 0);
         String storedSession = sp.getString(PREFS_SESSION, null);
-        if (ReportProtocol.isStaleSession(storedSession, session)) {
-            // 迟到的旧会话整批拒绝：旧进程可能在新主进程之后才把批次写进来，
-            // 不能让它覆盖/清空新会话的 reg/skip/crit。
-            return false;
-        }
+        // session 只做身份比较：不同即新会话（下面 shouldResetSession 清理旧数据），
+        // 相同即同进程继续合并。不再按启动毫秒拒绝“迟到”批次：时钟回拨后新会话
+        // 时间戳更早，按毫秒排序会让每一批都被丢弃，诊断页冻结在上一轮数据。
         SharedPreferences.Editor editor = sp.edit();
         boolean reset = ReportProtocol.shouldResetSession(
                 storedSession, session, mainProcess);
@@ -395,7 +392,7 @@ public final class StatusProvider extends ContentProvider {
             return false;
         }
         for (String pkg : packages) {
-            if (TARGET_PACKAGE.equals(pkg)) {
+            if (ReportPaths.TARGET_PACKAGE.equals(pkg)) {
                 return true;
             }
         }

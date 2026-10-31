@@ -10,6 +10,8 @@ import android.util.Log;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -37,6 +39,20 @@ public final class ReportSocketServer {
     private static final long ACCEPT_LOG_INTERVAL_MS = 60_000L;
     private static final int ACCEPT_LOG_FIRST = 5;
 
+    /**
+     * peer 校验结果缓存：抽象命名空间 socket 对本机所有应用可见，恶意应用可以
+     * 循环 connect；不缓存的话每次校验都要做一次 getPackagesForUid binder 查询
+     * （还会唤醒被冻结的模块进程）。UID → 包列表只在安装/卸载时变化，60 秒 TTL
+     * 足够新鲜；容量上限防多个 uid 撑爆内存。
+     */
+    private static final long PEER_CACHE_TTL_MS = 60_000L;
+    private static final int PEER_CACHE_MAX = 64;
+    private static final ConcurrentHashMap<Integer, PeerDecision> sPeerCache =
+            new ConcurrentHashMap<>();
+
+    /** 帧处理完成后的 1 字节确认值；发送端只认它，其余（EOF/超时）按失败降级。 */
+    public static final byte ACK_BYTE = '1';
+
     private static final AtomicBoolean sStarted = new AtomicBoolean();
 
     /** Application context；只存 app context，不持有 Activity。 */
@@ -46,6 +62,8 @@ public final class ReportSocketServer {
     private static int sAcceptLogs;
     private static volatile long sLastAcceptErrorLog;
     private static int sAcceptErrors;
+    private static volatile long sLastRejectLog;
+    private static int sRejectLogs;
 
     private ReportSocketServer() {
     }
@@ -121,13 +139,16 @@ public final class ReportSocketServer {
             return;
         }
         if (!isAllowedPeer(socket, context)) {
-            logWarn("qmreport socket reject reason=peer uid");
+            logPeerReject();
             return;
         }
         try {
             socket.setSoTimeout(READ_TIMEOUT_MS);
-        } catch (Throwable ignored) {
-            // 少数 ROM 上 setSoTimeout 可能失败；读端仍由对端写入后关闭来结束。
+        } catch (Throwable t) {
+            // 设不了读超时就直接断开：单线程 accept 循环不能赌“对端写完会关”，
+            // 否则一次挂起的 read 会停掉整个回传服务端，之后所有进程都进不来。
+            logWarn("qmreport socket reject reason=so timeout failed: " + describe(t));
+            return;
         }
         try {
             InputStream in = socket.getInputStream();
@@ -154,6 +175,7 @@ public final class ReportSocketServer {
             boolean applied = StatusProvider.applyReport(context, snapshot.data(),
                     snapshot.session(), mainProcess, ReportProtocol.SOURCE_SOCKET);
             logAccept(snapshot, mainProcess, applied);
+            writeAck(socket);
         } catch (Throwable t) {
             logWarn("qmreport socket read failed: " + describe(t));
         }
@@ -162,6 +184,10 @@ public final class ReportSocketServer {
     /**
      * 只接受高德目标进程或模块自身的连接。抽象命名空间 socket 对本机所有应用可见，
      * 不校验 UID 时任意应用都能伪造/清空诊断数据。
+     *
+     * <p>非本进程 uid 的校验结果进 {@link #sPeerCache}（TTL 内直接复用）：
+     * 循环 connect 的 binder 查询开销从「每次一条」降为「每个 uid 每 TTL 一条」。
+     * binder 查询抛异常时不缓存——瞬态失败不能把错误的答案钉住一个 TTL。
      */
     static boolean isAllowedPeer(LocalSocket socket, Context context) {
         try {
@@ -173,12 +199,45 @@ public final class ReportSocketServer {
             if (uid == Process.myUid()) {
                 return true;
             }
+            long now = System.currentTimeMillis();
+            PeerDecision cached = sPeerCache.get(uid);
+            if (isFresh(cached, now)) {
+                return cached.allowed;
+            }
             String[] packages = context.getPackageManager().getPackagesForUid(uid);
-            return isAllowedPackage(packages, context.getPackageName());
+            boolean allowed = isAllowedPackage(packages, context.getPackageName());
+            cachePeerDecision(uid, allowed, now);
+            return allowed;
         } catch (Throwable t) {
             logWarn("qmreport socket peer credentials failed: " + describe(t));
             return false;
         }
+    }
+
+    /** uid 的一次性校验结果；包内可见供单测。 */
+    static final class PeerDecision {
+        final boolean allowed;
+        final long atMs;
+
+        PeerDecision(boolean allowed, long atMs) {
+            this.allowed = allowed;
+            this.atMs = atMs;
+        }
+    }
+
+    /** 缓存是否仍新鲜；时钟回拨（now &lt; atMs）按过期处理，宁可多查一次 binder。包内可见供单测。 */
+    static boolean isFresh(PeerDecision decision, long nowMs) {
+        return decision != null
+                && nowMs >= decision.atMs
+                && nowMs - decision.atMs < PEER_CACHE_TTL_MS;
+    }
+
+    private static void cachePeerDecision(int uid, boolean allowed, long nowMs) {
+        if (sPeerCache.size() >= PEER_CACHE_MAX) {
+            // 简单防膨胀：极端情况下整表清空重查一轮，代价远小于不缓存。
+            sPeerCache.clear();
+        }
+        sPeerCache.put(uid, new PeerDecision(allowed, nowMs));
     }
 
     static boolean isAllowedPackage(String[] packages, String modulePackage) {
@@ -186,7 +245,7 @@ public final class ReportSocketServer {
             return false;
         }
         for (String pkg : packages) {
-            if (StatusProvider.TARGET_PACKAGE.equals(pkg)
+            if (ReportPaths.TARGET_PACKAGE.equals(pkg)
                     || (modulePackage != null && modulePackage.equals(pkg))) {
                 return true;
             }
@@ -208,6 +267,43 @@ public final class ReportSocketServer {
         logInfo("qmreport socket accept keys=" + snapshot.data().size()
                 + " session=" + shortSession(snapshot.session())
                 + " main=" + mainProcess + " applied=" + applied);
+    }
+
+    /**
+     * peer 校验失败的日志节流：与 logAccept 相同（前 5 条 + 之后每 60 秒一条）。
+     * 抽象命名空间 socket 对本机所有应用可见，恶意应用可以循环 connect；不节流
+     * 的话每次拒绝都写一条日志。binder 查询另由 peer 缓存按 TTL 收敛。
+     */
+    static boolean shouldLogPeerReject(int logged, long lastLogMs, long nowMs) {
+        return logged < ACCEPT_LOG_FIRST
+                || nowMs < lastLogMs
+                || nowMs - lastLogMs >= ACCEPT_LOG_INTERVAL_MS;
+    }
+
+    private static void logPeerReject() {
+        long now = System.currentTimeMillis();
+        if (!shouldLogPeerReject(sRejectLogs, sLastRejectLog, now)) {
+            return;
+        }
+        sRejectLogs++;
+        sLastRejectLog = now;
+        logWarn("qmreport socket reject reason=peer uid");
+    }
+
+    /**
+     * 帧处理完成后的 1 字节确认：发送端 {@link com.quietmap.app.hooks.ReportSocketSink}
+     * 收到 {@link #ACK_BYTE} 才算成功，否则降级 Provider/文件通道。旧版本发送端
+     * 不读该字节（写失败在此吞掉，不影响已落盘的数据）；拒绝路径（peer/长度/JSON）
+     * 不回写，发送端读到 EOF 按失败处理。
+     */
+    private static void writeAck(LocalSocket socket) {
+        try {
+            OutputStream out = socket.getOutputStream();
+            out.write(ACK_BYTE);
+            out.flush();
+        } catch (Throwable ignored) {
+            // 发送端可能已经关闭（旧版本写完立即 close）。
+        }
     }
 
     private static String shortSession(String session) {

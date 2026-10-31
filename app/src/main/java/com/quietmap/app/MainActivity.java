@@ -188,7 +188,10 @@ public class MainActivity extends AppCompatActivity {
         View root = findViewById(R.id.root);
         ViewCompat.setOnApplyWindowInsetsListener(root, (v, windowInsets) -> {
             Insets bars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            // bottom 不能写到 root：BottomNavigationView 在 Material 构造时会自己把
+            // 同一份导航栏 inset 加进自身 padding，root 再垫一次底栏会被抬高约
+            // 两倍导航栏高度。bottom 只由底栏自己消化（insets 原样下发）。
+            v.setPadding(bars.left, bars.top, bars.right, 0);
             return windowInsets;
         });
     }

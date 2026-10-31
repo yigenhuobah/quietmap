@@ -28,8 +28,9 @@ public final class Hooks {
     }
 
     /**
-     * Feature → 安装器映射。用 EnumMap 保证 O(1) 且无哈希冲突；
+     * 非 blocked 的 Feature → 安装器映射。用 EnumMap 保证 O(1) 且无哈希冲突；
      * 新增 Feature 忘记注册时 installOne 会打 ERROR 并标「未注册安装器」，不会静默漏挂。
+     * blocked 的 Feature（AD-03/AD-05/PV-03，17.02 无可用挂载点）不注册、不安装。
      */
     private static final Map<Feature, Installer> INSTALLERS;
 
@@ -37,12 +38,9 @@ public final class Hooks {
         EnumMap<Feature, Installer> m = new EnumMap<>(Feature.class);
         m.put(Feature.SPLASH_GATE, SplashGateHooks::install);
         m.put(Feature.SPLASH_REQUEST, SplashRequestHooks::install);
-        m.put(Feature.SPLASH_SHAKE, SplashShakeHooks::install);
         m.put(Feature.BG_MSG_FETCH, BgMsgFetchHooks::install);
         m.put(Feature.BG_AWAKEN_REPORT, BgAwakenReportHooks::install);
-        m.put(Feature.BG_AFC_TAOKE, BgAfcTaokeHooks::install);
         m.put(Feature.BG_UTDID_UPLOAD, BgUtdidUploadHooks::install);
-        m.put(Feature.H5_INSTALL_APK, H5InstallApkHooks::install);
         m.put(Feature.POPUP_UPGRADE, PopupUpgradeHooks::install);
         m.put(Feature.HOME_BANNER, HomeBannerHooks::install);
         m.put(Feature.HOME_OPERATE_BAR, HomeOperateBarHooks::install);
@@ -125,17 +123,34 @@ public final class Hooks {
     }
 
     private static void installOne(XposedModule module, ClassLoader cl, Feature f) {
+        Installer installer = INSTALLERS.get(f);
+        if (installer == null) {
+            module.log(Log.ERROR, TAG, f.id + " installer missing");
+            HookState.markNotFound(f, "未注册安装器");
+            markCriticalIfNoMount(f);
+            return;
+        }
+        installOne(module, cl, installer, f);
+    }
+
+    /**
+     * 单次安装尝试的统一收口；包内可见，供 HooksTest 用注入的 Installer 在 JVM 上
+     * 验证重试契约（清失败标记 → 重装 → markCriticalIfNoMount 重新判定）。
+     *
+     * 重试契约：QuietMapModule 在安装抛错后回滚 sInstalled，下一轮 onPackageReady
+     * 会重跑安装；HookState 的失败标记只增不清，上一轮留下的 skip/crit 若不在
+     * 本轮开始前清掉，重试成功的功能会继续上报 crit=1。因此每次尝试都先
+     * {@link HookState#clearFailures}，重试成功即恢复干净状态，重试失败会重新记录。
+     */
+    static void installOne(XposedModule module, ClassLoader cl, Installer installer, Feature f) {
+        HookState.clearFailures(f);
         try {
-            Installer installer = INSTALLERS.get(f);
-            if (installer == null) {
-                module.log(Log.ERROR, TAG, f.id + " installer missing");
-                HookState.markNotFound(f, "未注册安装器");
-                return;
-            }
             installer.install(module, cl);
         } catch (Throwable t) {
             module.log(Log.ERROR, TAG, f.id + " install threw", t);
-            HookState.markNotFound(f, "安装异常");
+            // 安装异常显式 critical：即便零挂载 + 无 skip（异常发生在任何 skip 之前），
+            // 整体失效也必须可见，不能静默。
+            HookState.markNotFoundCritical(f, "安装异常");
         } finally {
             markCriticalIfNoMount(f);
         }

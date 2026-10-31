@@ -110,10 +110,9 @@ public class DiagnosticsFragment extends PreferenceFragmentCompat {
             sCachedState = loaded;
             sCachedAt = now;
             final ReportState result = loaded;
-            if (!isAdded() || getActivity() != host) {
-                mLoadInFlight = false;
-                return;
-            }
+            // isAdded()/getActivity() 是主线程 API（Fragment.mHost/mAdded 非 volatile），
+            // 不能在这个 IO 线程读；失效结果的丢弃统一交给 runOnUiThread 里的主线程复查
+            // （与 SettingsFragment 的 STATUS_EXECUTOR 任务同一约定）。
             host.runOnUiThread(() -> {
                 mLoadInFlight = false;
                 if (!isAdded() || getActivity() != host

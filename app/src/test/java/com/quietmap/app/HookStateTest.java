@@ -89,4 +89,30 @@ public class HookStateTest {
         assertEquals("labels 去重后计数", 2, HookState.installedCount(f));
         assertEquals(2, HookState.labels(f).size());
     }
+
+    @Test
+    public void clearFailuresRemovesSkipAndCriticalButKeepsLabelsAndHits() {
+        Feature f = Feature.POPUP_UPGRADE;
+        HookState.markNotFound(f, "类未找到 X");
+        HookState.markNotFoundCritical(f, "无可用挂载点");
+        HookState.installed(f, "a");
+        HookState.hit(f);
+        assertTrue(HookState.hasCriticalSkip(f));
+        assertEquals("无可用挂载点", HookState.skipReason(f));
+
+        HookState.clearFailures(f);
+        assertFalse("清除后不得再报 critical（重试成功后 crit=1 必须消失）",
+                HookState.hasCriticalSkip(f));
+        assertNull("清除后 skip 原因应为空", HookState.skipReason(f));
+        assertEquals("labels 不受清除影响", 1, HookState.installedCount(f));
+        assertEquals("hit 计数不受清除影响", 1L, HookState.hitCount(f));
+    }
+
+    @Test
+    public void clearFailuresOnUntouchedFeatureIsNoOp() {
+        Feature f = Feature.MAP_FLOAT_LAYER;
+        HookState.clearFailures(f);
+        assertFalse(HookState.hasCriticalSkip(f));
+        assertNull(HookState.skipReason(f));
+    }
 }

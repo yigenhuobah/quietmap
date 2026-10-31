@@ -1,6 +1,7 @@
 package com.quietmap.app;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
@@ -112,6 +113,38 @@ public class HookSwitchMatrixTest {
             for (Feature f : Feature.values()) {
                 boolean expected = f != off && f.defaultEnabled;
                 assertEquals("关掉 " + off.key + " 后 " + f.key + " 状态不对",
+                        expected, c.enabled(f));
+            }
+        }
+    }
+
+    /**
+     * 反方向矩阵：编译期默认关的功能（PV 组）必须能被 override 打开。
+     * 上面的用例只 put(false)，对 defaultEnabled=false 的功能 expected 与
+     * actual 恒为 false，override 等于没被验证；fromOverrides 一旦丢弃
+     * true 值，用户就永远打不开这几个功能，这里逐个拦截。
+     */
+    @Test
+    public void defaultOffFeaturesCanBeEnabledByOverride() {
+        int defaultOff = 0;
+        for (Feature f : Feature.values()) {
+            if (!f.defaultEnabled) {
+                defaultOff++;
+            }
+        }
+        assertTrue("本用例假设存在编译期默认关的功能，否则 true 值回归无法暴露",
+                defaultOff > 0);
+
+        for (Feature on : Feature.values()) {
+            if (on.defaultEnabled) {
+                continue;
+            }
+            Map<String, Boolean> overrides = new HashMap<>();
+            overrides.put(on.key, true);
+            Config c = Config.fromOverrides(overrides);
+            for (Feature f : Feature.values()) {
+                boolean expected = f == on || f.defaultEnabled;
+                assertEquals("打开 " + on.key + " 后 " + f.key + " 状态不对",
                         expected, c.enabled(f));
             }
         }

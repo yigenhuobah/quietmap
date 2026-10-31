@@ -49,7 +49,11 @@ import io.github.libxposed.api.XposedModule;
  *
  * fail-open：
  * - 非消息页/我的页：一律 proceed 原方法，不影响首页、搜索等页面；
- * - 回调为 null、页面路径取不到、类/方法缺失：proceed 原方法；
+ * - 回调为 null、页面路径取不到、类/方法缺失：getAllSessionList/getBadgeInfo
+ *   proceed 原方法；getItemSync/setItemSync 例外——namespace/key 已限定
+ *   message_tab/recentlyMsgList-*（见 isRecentListKey），页面路径取不到时
+ *   按刻意保留的 key-only 回退继续拦截，只影响消息页自己的最近消息缓存
+ *   （见 shouldInterceptRecentList 注释与 MsgCenterHooksTest 的回归锁定）；
  * - 回调已开始执行后抛异常：不再 proceed，避免 JS 收到两次结果。
  *
  * 注意：会话列表包含账号安全、公交动态等真实通知，本项开启时会一并隐藏；

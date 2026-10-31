@@ -25,9 +25,14 @@ public enum Feature {
     /** 开屏广告请求断源（sendSplashScreen + Lah5#attemptRequestData 不调用，旧版 Lze5）。 */
     SPLASH_REQUEST("AD-02", "splash_request", R.string.f_splash_request_title,
             R.string.f_splash_request_summary, true, Group.AD),
-    /** 开屏摇一摇禁用（SplashButtonInfo 摇一摇字段返回空/false）。 */
+    /**
+     * 开屏摇一摇禁用。17.02 实测：SplashButtonInfo 摇一摇字段只控制文案，
+     * 触发链在 ShakeButton 传感器层（style=3 无条件建按钮并注册监听），
+     * 数据层钩子拦不住——blocked，保留编号与行位，待真实挂载点核实后恢复。
+     */
     SPLASH_SHAKE("AD-03", "splash_shake", R.string.f_splash_shake_title,
-            R.string.f_splash_shake_summary, true, Group.AD),
+            R.string.f_splash_shake_summary, false, Group.AD,
+            "17.02 摇一摇触发链在 ShakeButton 传感器层，SplashButtonInfo 数据层钩子拦不住"),
     /**
      * 后台拉取营销消息 + 亮屏触发源（MessageBoxManager#getMessageInBackground +
      * BackgroundMsgScreenReceiver）；另挂 handlePush、BackgroundMsgManager#a、
@@ -38,15 +43,17 @@ public enum Feature {
     /** 唤起端上报（AwakenRequestHolder#sendAwakenPage）。 */
     BG_AWAKEN_REPORT("PV-01", "bg_awaken_report", R.string.f_bg_awaken_report_title,
             R.string.f_bg_awaken_report_summary, false, Group.PV),
-    /** 淘宝客广告 SDK 冷启动注册（AfcTkManager#registerTkFlag）。 */
+    /** 淘宝客广告 SDK 冷启动注册；17.02 registerTkFlag 无调用点，死钩子不装。 */
     BG_AFC_TAOKE("AD-05", "bg_afc_taoke", R.string.f_bg_afc_taoke_title,
-            R.string.f_bg_afc_taoke_summary, true, Group.AD),
+            R.string.f_bg_afc_taoke_summary, false, Group.AD,
+            "17.02 AfcTkManager#registerTkFlag 无调用点，钩子永不命中"),
     /** 设备指纹上传（UtdidUploadTask upload/uploadFromCache/reqServer）。 */
     BG_UTDID_UPLOAD("PV-02", "bg_utdid_upload", R.string.f_bg_utdid_upload_title,
             R.string.f_bg_utdid_upload_summary, false, Group.PV),
-    /** H5 静默下载安装 APK（DeviceInfo#installApk）。 */
+    /** H5 静默下载安装 APK；17.02 installApk 无调用点（真实安装链 Laa0.a 未覆盖），死钩子不装。 */
     H5_INSTALL_APK("PV-03", "h5_install_apk", R.string.f_h5_install_apk_title,
-            R.string.f_h5_install_apk_summary, false, Group.PV),
+            R.string.f_h5_install_apk_summary, false, Group.PV,
+            "17.02 DeviceInfo#installApk 无调用点，真实安装链（Laa0.a）未覆盖"),
     /** 升级弹窗（AppUpgradeController#q）。 */
     POPUP_UPGRADE("UI-01", "popup_upgrade", R.string.f_popup_upgrade_title,
             R.string.f_popup_upgrade_summary, true, Group.UI),

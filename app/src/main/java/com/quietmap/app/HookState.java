@@ -80,6 +80,22 @@ public final class HookState {
         return s != null && !s.criticalSkips.isEmpty();
     }
 
+    /**
+     * 清除该功能的失败标记（skip 原因与 critical 集合）；labels/hits/entries 保留。
+     *
+     * 用于 QuietMapModule 回滚 sInstalled 后的重试：失败标记只增不清，上一轮安装
+     * 记下的 skip/crit 若不在下一轮安装前清掉，重试成功的功能会继续上报 crit=1
+     * 与「无可用挂载点」，诊断页和失败横幅会把已挂载的功能判成整体失效。
+     * 重试要么以干净状态成功，要么重新记录本轮的真实失败。
+     */
+    public static void clearFailures(Feature f) {
+        State s = STATES.get(f);
+        if (s != null) {
+            s.criticalSkips.clear();
+            s.skip = null;
+        }
+    }
+
     /** 命中计数 +1，返回累加后的次数（供 HookKit 做日志采样）。 */
     public static long hit(Feature f) {
         return state(f).hits.incrementAndGet();
