@@ -88,6 +88,7 @@ SHA-256: `a59d7c8357a290d2ade1b2345456b87159af3ddda84165b7223da397f159259b`
 - `tools/check-mounts.sh` 对高德 17.02.0.2010（`base.apk` sha256 前 16 位 `768d62ee138771c0`，aapt2 读出 versionName 17.02.0.2010）共 63 项：**OK 63 / SIG 0 / GONE 0**；两条混淆锚点监控（`Lah5#attemptRequestData`、`Ln8#run`）均显示 `[锚点OK]`。
 - 12 条 SIG 均用 dexsql（`query-cache` 对 `tools/.dexsql-cache/768d62ee138771c0/cache.dxc2`）定位：methods 精确签名反查、method_strings 锚点反查、class_interfaces 接口实现类反查；未使用 jadx。
 - 真机（24129PN74C / HyperOS 4.0 / Android 17 / LSPosed 2.2.1）：打开开关 → `disabledComponents` 出现 `LauncherEntry`、`resolve-activity -c android.intent.category.LAUNCHER` 返回 `No activity found`；关闭 → 恢复为 `LauncherEntry`。
+- 真机（25102RKBEC / Android 17 / LSPosed 2.2.1 / 高德 17.02.0.2010）：0.8.3 覆盖安装后状态卡显示「目标 17.02.0.2010 · v0.8.3」；开 → `LauncherEntry` 禁用、LAUNCHER 入口消失，关 → 恢复；启动高德后 `AD-02 hit Lah5#attemptRequestData(IZ)`、`PV-04 hit UTTracker#send`、`UI-04 hit UpdateHintConfigDownloader#a`，无 FATAL/ANR。
 - 隐藏状态下 `-c de.robv.android.xposed.category.MODULE_SETTINGS` 仍解析到 `MainActivity`（自锁风险已实测排除）；切到别的 tab 再回关于页，开关状态与系统一致；无 FATAL/ANR。
 - `tools/verify-apk.sh` PASS（17 个 `[ok]`、0 失败）：versionCode=12、versionName=0.8.3、签名证书 SHA-256 与 0.8.1/0.8.2 一致。
 - `:app:assembleRelease` 通过。
