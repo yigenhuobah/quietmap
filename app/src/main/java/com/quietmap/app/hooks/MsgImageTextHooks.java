@@ -15,15 +15,16 @@ import io.github.libxposed.api.XposedModule;
  * dexsql 复核与调研清单的出入（以 dexsql 为准）：
  * - 调研写的 ImageTextMessageDownloader 类实测只有静态方法 a(File)Z（递归删除缓存文件），
  *   不是下载入口。
- * - 真正的下载入口是混淆 Runnable La8;->run()V：方法体含
+ * - 真正的下载入口是混淆 Runnable Ln8;->run()V（17.01.0.2012 为 La8;，17.02.0.2010
+ *   改名，方法体与锚点串不变）：方法体含
  *   "ImageTextMessageDownloader" / "start" / "invalid download item: " 等字符串，
  *   先清理超过 28 天的 image_text_message 缓存，再构造 DownloadRequest +
  *   ImageTextMessageDownloader$FinishCallback（通过 imagetextmessage/a 回调包装），
  *   最后调用 IHttpService.download(...)。不调用 run() 即不发起素材下载。
  *   （清理逻辑随之跳过，仅留下过期缓存，不影响功能。）
  *
- * La8 是单字母混淆类，定位策略与批 2 的 Lze5 一致：
- *   类名列表 ["a8"] 优先（描述符 La8; → Java 名 a8，Class.forName 毫秒级命中）；
+ * Ln8 是短名混淆类，定位策略与批 2 的 Lah5（旧 Lze5）一致：
+ *   类名列表 ["n8"] 优先（描述符 Ln8; → Java 名 n8，Class.forName 毫秒级命中）；
  *   DexKit 按方法体字符串锚定（"invalid download item: " +
  *   "ImageTextMessageDownloader"，void()V 签名强校验）仅作兜底，避免冷启动
  *   白付 native 加载 + 全 dex 扫描。
@@ -32,7 +33,7 @@ import io.github.libxposed.api.XposedModule;
 final class MsgImageTextHooks {
 
     /** 兜底类名：高德升级后先用 check-mounts.sh 体检 + dexsql 字符串反查，再追加新名。 */
-    private static final String[] DOWNLOAD_CLASS_NAMES = {"a8"};
+    private static final String[] DOWNLOAD_CLASS_NAMES = {"n8"};
     private static final String DOWNLOAD_METHOD = "run";
 
     private MsgImageTextHooks() {
@@ -42,8 +43,8 @@ final class MsgImageTextHooks {
         Feature f = Feature.MSG_IMAGE_TEXT;
         try {
             Method run = resolveDownloadRun(module, f, cl);
-            HookKit.install(module, f, "La8#run", run,
-                    HookKit.skipVoid(module, f, "La8#run"));
+            HookKit.install(module, f, "Ln8#run", run,
+                    HookKit.skipVoid(module, f, "Ln8#run"));
         } catch (Throwable t) {
             HookKit.error(module, f.id + " install aborted", t);
         }
@@ -83,7 +84,7 @@ final class MsgImageTextHooks {
 
         HookKit.warn(module, f.id + " skip: image-text downloader not found (class-name list "
                 + java.util.Arrays.toString(DOWNLOAD_CLASS_NAMES) + " + dexkit anchor)");
-        HookState.markNotFound(f, "La8#run 锚定失败");
+        HookState.markNotFound(f, "Ln8#run 锚定失败");
         return null;
     }
 }

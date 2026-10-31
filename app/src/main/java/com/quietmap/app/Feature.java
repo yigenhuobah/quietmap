@@ -22,7 +22,7 @@ public enum Feature {
     /** 开屏闸门（canShowSplash 返回 Boolean.FALSE + tryShowSplashView 不调用，双保险）。 */
     SPLASH_GATE("AD-01", "splash_gate", R.string.f_splash_gate_title,
             R.string.f_splash_gate_summary, true, Group.AD),
-    /** 开屏广告请求断源（sendSplashScreen + Lze5#attemptRequestData 不调用）。 */
+    /** 开屏广告请求断源（sendSplashScreen + Lah5#attemptRequestData 不调用，旧版 Lze5）。 */
     SPLASH_REQUEST("AD-02", "splash_request", R.string.f_splash_request_title,
             R.string.f_splash_request_summary, true, Group.AD),
     /** 开屏摇一摇禁用（SplashButtonInfo 摇一摇字段返回空/false）。 */
@@ -81,7 +81,7 @@ public enum Feature {
     /**
      * 弹窗净化（升级提示配置 + 首页弹窗冲突队列）：
      * UpdateHintConfigDownloader#a 不调用、IDialogConflictMgr 实现类
-     * Lcx1#addToQueue 返回 false。后者中风险（可能误伤业务弹窗），可单关。
+     * Lry1#addToQueue（旧版 Lcx1）返回 false。后者中风险（可能误伤业务弹窗），可单关。
      */
     POPUP_CLEAN("UI-04", "popup_clean", R.string.f_popup_clean_title,
             R.string.f_popup_clean_summary, true, Group.UI),

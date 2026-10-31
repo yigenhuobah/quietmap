@@ -13,15 +13,17 @@ public final class Anchors {
     }
 
     /**
-     * 开屏广告请求调度的特征字符串：Lze5;->attemptRequestData(IZ)V 方法体内
-     * 含 "不发送请求：…" 系列日志串（dexsql method_strings 实测）。
-     * 注意 Lye5;->run()V 也含 "不发送请求：拿不到锁" 一个同首串，
+     * 开屏广告请求调度的特征字符串：Lah5;->attemptRequestData(IZ)V 方法体内
+     * 含 "不发送请求：…" 系列日志串（dexsql method_strings 实测，17.02.0.2010
+     * 复测仍在；旧版本该类名为 Lze5;）。
+     * 注意 Lzg5;->run()V 也含 "不发送请求：拿不到锁" 一个同首串（旧版 Lye5;），
      * 所以锚定命中后必须再用方法名/参数消歧（见 DexKitLocator 的两次尝试）。
      */
     public static final String STR_SPLASH_REQ_NO_SEND = "不发送请求";
 
     /**
-     * 营销图文消息素材下载任务 La8;->run()V 的特征字符串（dexsql method_strings 实测）：
+     * 营销图文消息素材下载任务 Ln8;->run()V 的特征字符串（dexsql method_strings 实测，
+     * 17.02.0.2010 复测仍在；旧版本该类名为 La8;）：
      * "invalid download item: " 是该 Runnable 独有的失败日志，配合类名串
      * "ImageTextMessageDownloader" 与 void()V 签名可唯一消歧。
      */

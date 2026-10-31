@@ -25,7 +25,8 @@ import io.github.libxposed.api.XposedModule;
 /**
  * notify_guide 通知权限引导净化（只拦通知权限，定位/相机等引导保持原样）。
  *
- * dexsql 实测（高德 17.01.0.2012）：
+ * dexsql 实测（高德 17.02.0.2010；17.01.0.2012 挂载点同构，仅桥接类混淆名
+ * Lso2; → Lpp2;，方法体字符串集合完全一致）：
  *
  * 1) com.alipay.android.phone.mobilesdk.permission.guide.PermissionGuideFloatShow
  *    #showNotificationGuide(PermissionGuideRequest)V
@@ -38,7 +39,7 @@ import io.github.libxposed.api.XposedModule;
  *    SysPermissionGuideMode 上，反射读取；只有命中通知权限时才跳过，
  *    其余权限引导原样 proceed。
  *
- * 3) so2#i(Activity, JSONObject, String)V
+ * 3) pp2#i(Activity, JSONObject, String)V（17.01 为 so2#i）
  *    权限请求参数桥。只有同时满足以下条件才把 permissionType 改写为 "location"：
  *    - permissionType 是**单一**通知权限（不含逗号/分号/竖线/空白，不含其他权限）；
  *    - 目标 Activity 的定位权限已经授予（fine + coarse 都已授权）。
@@ -66,7 +67,7 @@ final class NotifyGuideHooks {
     private static final String SYS_GUIDE_MODE =
             "com.alipay.android.phone.mobilesdk.permission.guide.sys.SysPermissionGuideMode";
 
-    private static final String PERMISSION_BRIDGE = "so2";
+    private static final String PERMISSION_BRIDGE = "pp2";
     private static final String FIELD_PERM_TYPE = "permissionType";
     private static final String PROXY_PERMISSION_TYPE = "location";
     private static final String FIELD_PERMISSION = "guidePermissionStr";
@@ -145,17 +146,17 @@ final class NotifyGuideHooks {
         }
         Method query = HookKit.findMethod(module, f, bridge, "i",
                 Activity.class, JSONObject.class, String.class);
-        HookKit.install(module, f, "so2#i", query,
+        HookKit.install(module, f, "pp2#i", query,
                 permissionTypeRewrite(module, f));
     }
 
     /**
-     * so2#i 参数重写：仅 3 参且第 2 参为 JSONObject 时生效；
+     * pp2#i 参数重写：仅 3 参且第 2 参为 JSONObject 时生效；
      * permissionType 命中通知权限才复制 JSON 并改写，否则原样 proceed。
      */
     private static XposedInterface.Hooker permissionTypeRewrite(final XposedModule module,
                                                                 final Feature f) {
-        final String detail = "so2#i";
+        final String detail = "pp2#i";
         final String logLine = f.id + " hit " + detail;
         return new XposedInterface.Hooker() {
             @Override

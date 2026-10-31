@@ -10,13 +10,14 @@ import io.github.libxposed.api.XposedModule;
 /**
  * home_msg_filter 首页消息红点体系净化（数据层断源，白名单式取舍）。
  *
- * dexsql 实测（高德 17.01.0.2012）挂载点：
+ * dexsql 实测（高德 17.02.0.2010；17.01.0.2012 挂载点同构，仅混淆参数类型
+ * Lxf2; → Lzg2;、实现类 Llt1; → Lev1;）挂载点：
  *
  * 1) MessageBoxManager#getMessages —— **三个重载全挂**（dexsql 实测 3 条签名，
  *    任务清单只列了 1 条，以实测为准）：
- *      (GetMessageListener, boolean, xf2)
- *      (GetMessageListener, boolean, boolean, xf2)
- *      (GetMessageListener, boolean, boolean, xf2, String)
+ *      (GetMessageListener, boolean, zg2)
+ *      (GetMessageListener, boolean, boolean, zg2)
+ *      (GetMessageListener, boolean, boolean, zg2, String)
  *    该方法内部依次调 retrieveLocalMessages(Set, boolean) 与
  *    retrieveRemoteMessages(Set, String)，是首页消息盒拉取的总入口。
  *    不调用 → 首页消息列表/红点不再有新数据。
@@ -28,10 +29,9 @@ import io.github.libxposed.api.XposedModule;
  *
  * 3) IDeliveryDisplay#start 的实现类 —— 接口是
  *    Lcom/autonavi/minimap/bundle/msgbox/mainmap/IDeliveryDisplay;（纯接口，
- *    hook 接口方法无效），实际实现类是混淆类 Llt1;（dexsql class_interfaces
- *    查到它 implements IDeliveryDisplay；AMapHomeMsgManager$b$a;->run()V
- *    smali 里 new-instance Llt1; 后 invoke-interface IDeliveryDisplay;->start）。
- *    故必须挂 Llt1;->start(Activity, AmapMessage)。
+ *    hook 接口方法无效），实际实现类是混淆类 Lev1;（dexsql class_interfaces
+ *    反查：17.02.0.2010 下唯一实现类，旧版本为 Llt1;）。
+ *    故必须挂 Lev1;->start(Activity, AmapMessage)。
  *
  * 4) 角标红点桥接：AbstractModuleBadge 是抽象类（access_flags=1025），
  *    唯一子类 Lcom/amap/bundle/badgesystem/ajxmodule/AjxModuleBadge; 覆写了
@@ -66,11 +66,11 @@ final class HomeMsgFilterHooks {
             "com.autonavi.minimap.bundle.msgbox.util.MessageBoxManager";
     private static final String GET_MESSAGE_LISTENER =
             "com.autonavi.minimap.bundle.msgbox.util.MessageBoxManager$GetMessageListener";
-    /** getMessages 的第三个参数类型，dexsql 描述符 Lxf2;（包内混淆接口/类）。 */
-    private static final String XF2 = "xf2";
+    /** getMessages 的第三个参数类型，dexsql 描述符 Lzg2;（包内混淆接口/类，旧版 Lxf2;）。 */
+    private static final String MSG_FILTER_PARAM = "zg2";
 
-    /** IDeliveryDisplay 的实际实现类（dexsql class_interfaces 实测）。 */
-    private static final String DELIVERY_DISPLAY_IMPL = "lt1";
+    /** IDeliveryDisplay 的实际实现类（dexsql class_interfaces 实测，旧版 Llt1;）。 */
+    private static final String DELIVERY_DISPLAY_IMPL = "ev1";
     private static final String AMAP_MESSAGE =
             "com.autonavi.minimap.bundle.msgbox.entity.AmapMessage";
 
@@ -98,32 +98,32 @@ final class HomeMsgFilterHooks {
     }
 
     /**
-     * getMessages 三个重载全挂。参数类型 GetMessageListener / xf2 需先从目标
+     * getMessages 三个重载全挂。参数类型 GetMessageListener / zg2 需先从目标
      * ClassLoader 加载才能反射拿 Method；任一类型缺失则整组跳过（避免挂半套）。
      */
     private static void installGetMessages(XposedModule module, Feature f, ClassLoader cl) {
         Class<?> manager = HookKit.findClass(module, f, cl, MESSAGE_BOX_MANAGER);
         Class<?> listener = HookKit.findClass(module, f, cl, GET_MESSAGE_LISTENER);
-        Class<?> xf2 = HookKit.findClass(module, f, cl, XF2);
-        if (manager == null || listener == null || xf2 == null) {
+        Class<?> filterParam = HookKit.findClass(module, f, cl, MSG_FILTER_PARAM);
+        if (manager == null || listener == null || filterParam == null) {
             return;
         }
 
-        // 2 参：(GetMessageListener, boolean, xf2)
+        // 2 参：(GetMessageListener, boolean, zg2)
         Method m2 = HookKit.findMethod(module, f, manager,
-                "getMessages", listener, boolean.class, xf2);
+                "getMessages", listener, boolean.class, filterParam);
         HookKit.install(module, f, "MessageBoxManager#getMessages(2p)", m2,
                 HookKit.skipVoid(module, f, "MessageBoxManager#getMessages(2p)"));
 
-        // 3 参：(GetMessageListener, boolean, boolean, xf2)
+        // 3 参：(GetMessageListener, boolean, boolean, zg2)
         Method m3 = HookKit.findMethod(module, f, manager,
-                "getMessages", listener, boolean.class, boolean.class, xf2);
+                "getMessages", listener, boolean.class, boolean.class, filterParam);
         HookKit.install(module, f, "MessageBoxManager#getMessages(3p)", m3,
                 HookKit.skipVoid(module, f, "MessageBoxManager#getMessages(3p)"));
 
-        // 4 参：(GetMessageListener, boolean, boolean, xf2, String)
+        // 4 参：(GetMessageListener, boolean, boolean, zg2, String)
         Method m4 = HookKit.findMethod(module, f, manager,
-                "getMessages", listener, boolean.class, boolean.class, xf2, String.class);
+                "getMessages", listener, boolean.class, boolean.class, filterParam, String.class);
         HookKit.install(module, f, "MessageBoxManager#getMessages(4p)", m4,
                 HookKit.skipVoid(module, f, "MessageBoxManager#getMessages(4p)"));
     }
@@ -142,7 +142,7 @@ final class HomeMsgFilterHooks {
 
     /**
      * 主图投放展示：接口 IDeliveryDisplay 不能 hook（接口方法无实现体，
-     * 挂上也不会被调用——ART 走 itable 分派到实现类方法），必须挂实现类 Llt1。
+     * 挂上也不会被调用——ART 走 itable 分派到实现类方法），必须挂实现类 Lev1。
      */
     private static void installDeliveryDisplay(XposedModule module, Feature f, ClassLoader cl) {
         Class<?> impl = HookKit.findClass(module, f, cl, DELIVERY_DISPLAY_IMPL);
@@ -152,8 +152,8 @@ final class HomeMsgFilterHooks {
         }
         Method start = HookKit.findMethod(module, f, impl,
                 "start", android.app.Activity.class, message);
-        HookKit.install(module, f, "Llt1#IDeliveryDisplay.start", start,
-                HookKit.skipVoid(module, f, "Llt1#IDeliveryDisplay.start"));
+        HookKit.install(module, f, "Lev1#IDeliveryDisplay.start", start,
+                HookKit.skipVoid(module, f, "Lev1#IDeliveryDisplay.start"));
     }
 
     /** 角标红点：updateAppBadge(count>0) 不调用 + setBadgeDisplay 不调用。 */

@@ -30,10 +30,12 @@
 #   SIG  = 类还在但方法签名变了（改名 / 参数变化），看差异再决定
 #
 # 挂载点清单（共 63 条）与 app/src/main/java/com/quietmap/app/hooks/ 下的常量一一对应，
-# 完整签名取自 dexsql 对高德 17.01.0.2012 的实测。
-# 混淆类挂载点（Lze5#attemptRequestData、La8#run）另有方法体字符串锚点监控：
+# 完整签名取自 dexsql 对高德 17.02.0.2010 的实测（17.01.0.2012 → 17.02.0.2010
+# 重定位 12 条，混淆名旧→新：Lze5→Lah5、Llt1→Lev1、Ln55→Lp75、La8→Ln8、
+# Lcx1→Lry1、Le72→Lo82、Lso2→Lpp2、Lxf2→Lzg2）。
+# 混淆类挂载点（Lah5#attemptRequestData、Ln8#run）另有方法体字符串锚点监控：
 # 签名在但锚点串丢了也判 SIG（运行时 DexKit 按锚点定位会失败）。
-# La8 的锚点监控与运行时 Anchors.java 保持一致：两条字符串必须同时命中。
+# Ln8 的锚点监控与运行时 Anchors.java 保持一致：两条字符串必须同时命中。
 
 set -u
 
@@ -357,8 +359,8 @@ count() {
 # 批 3（首页营销三件套）说明：
 # - sendList 批 2 经验的多重载全挂：2 参 + 3 参两条都列。
 # - getMessages 批 3 dexsql 复核发现是**三个**重载（任务清单原写 1 个），三条全列。
-# - IDeliveryDisplay#start 挂实现类 Llt1（接口层 hook 无效，ART 走 itable 分派），
-#   Llt1 是混淆类，与 Lze5 同样需要「类名变更监控」——这里只查签名，
+# - IDeliveryDisplay#start 挂实现类 Lev1（接口层 hook 无效，ART 走 itable 分派；
+#   17.01.0.2012 为 Llt1），Lev1 是混淆类，与 Lah5 同样需要「类名变更监控」——这里只查签名，
 #   运行时定位失败由 fail-open 记 skip；类名变了查 class_interfaces 反查新实现类。
 # - AjxModuleBadge 是 AbstractModuleBadge（抽象类）的唯一子类，
 #   updateAppBadge/setBadgeDisplay 的实体实现都在它上面（smali 实测）。
@@ -376,7 +378,7 @@ Lcom/autonavi/bundle/amaphome/impl/BootBizDataPreloaderImpl;->canShowSplash()Lja
 Lcom/autonavi/minimap/impl/SplashScreenServiceImpl;->tryShowSplashView(ILjava/lang/String;)V|splash_gate 展示层兜底(不调用)
 Lcom/autonavi/minimap/alimama/AlimamaRequestHolder;->sendSplashScreen(Lcom/autonavi/minimap/alimama/param/SplashScreenRequest;Lcom/autonavi/minimap/falcon/base/a;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V|splash_request 开屏广告请求(3参,dexsql实测falcon包名)
 Lcom/autonavi/minimap/alimama/AlimamaRequestHolder;->sendSplashScreen(Lcom/autonavi/minimap/alimama/param/SplashScreenRequest;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V|splash_request 开屏广告请求(2参重载)
-Lze5;->attemptRequestData(IZ)V|splash_request 开屏广告请求调度(混淆类,字符串锚定"不发送请求",SIG监控)
+Lah5;->attemptRequestData(IZ)V|splash_request 开屏广告请求调度(混淆类,字符串锚定"不发送请求",SIG监控)
 Lcom/autonavi/minimap/entity/SplashButtonInfo;->getShakeGuide()Ljava/lang/String;|splash_shake 摇一摇引导清空
 Lcom/autonavi/minimap/entity/SplashButtonInfo;->getShakeTip()Ljava/lang/String;|splash_shake 摇一摇提示清空
 Lcom/autonavi/minimap/entity/SplashButtonInfo;->isSpeedStrict()Z|splash_shake 摇一摇速度严格关
@@ -385,26 +387,26 @@ Lcom/autonavi/minimap/banner/BannerRequestHolder;->sendList(Lcom/autonavi/minima
 Lcom/autonavi/bundle/banner/manager/BannerManager;->b(Ljava/lang/String;ZZLcom/autonavi/bundle/banner/manager/OnLoadBannerListener;)V|home_banner 运营位Banner加载
 Lcom/autonavi/bundle/uitemplate/mapwidget/widget/activity/OperateActivityMapWidget;->refreshSplashBar(Lcom/autonavi/minimap/bundle/msgbox/entity/AmapMessage;Ljava/lang/String;Ljava/lang/String;Lcom/autonavi/minimap/bundle/msgbox/listener/ActivityEventCallback;)V|home_operate_bar 首页运营活动条
 Lcom/autonavi/bundle/uitemplate/mapwidget/widget/msgtip/MsgTipMapWidget;->showTips(Lcom/autonavi/minimap/bundle/msgbox/entity/AmapMessage;I)Z|home_operate_bar 地图消息气泡(return false)
-Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager;->getMessages(Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager$GetMessageListener;ZLxf2;)V|home_msg_filter 消息拉取(2参重载)
-Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager;->getMessages(Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager$GetMessageListener;ZZLxf2;)V|home_msg_filter 消息拉取(3参重载)
-Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager;->getMessages(Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager$GetMessageListener;ZZLxf2;Ljava/lang/String;)V|home_msg_filter 消息拉取(4参重载)
+Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager;->getMessages(Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager$GetMessageListener;ZLzg2;)V|home_msg_filter 消息拉取(2参重载)
+Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager;->getMessages(Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager$GetMessageListener;ZZLzg2;)V|home_msg_filter 消息拉取(3参重载)
+Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager;->getMessages(Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager$GetMessageListener;ZZLzg2;Ljava/lang/String;)V|home_msg_filter 消息拉取(4参重载)
 Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager;->retrieveRemoteMessages(Ljava/util/Set;Ljava/lang/String;)V|home_msg_filter 远程营销消息拉取
-Llt1;->start(Landroid/app/Activity;Lcom/autonavi/minimap/bundle/msgbox/entity/AmapMessage;)V|home_msg_filter 主图投放(接口IDeliveryDisplay实现类,混淆类)
+Lev1;->start(Landroid/app/Activity;Lcom/autonavi/minimap/bundle/msgbox/entity/AmapMessage;)V|home_msg_filter 主图投放(接口IDeliveryDisplay实现类,混淆类)
 Lcom/amap/bundle/badgesystem/ajxmodule/AjxModuleBadge;->updateAppBadge(Ljava/lang/String;I)V|home_msg_filter 角标红点更新
 Lcom/amap/bundle/badgesystem/ajxmodule/AjxModuleBadge;->setBadgeDisplay(Ljava/lang/String;Z)V|home_msg_filter 角标显示(不调用)
 Lcom/autonavi/jni/badgesystem/BadgeSystemManager;->updateAppBadge(Ljava/lang/String;I)V|home_msg_filter 启动器角标
 Lcom/autonavi/bundle/amaphome/components/searchbar/BaseSearchBar;->requestPreSetWord(ZLjava/lang/String;)V|search_hotword 搜索框热词请求(唯一重载)
-Lcom/autonavi/bundle/uitemplate/preset/PreSetWordManager;->d(Ln55;)V|search_hotword 热词本地计数
-Lcom/autonavi/bundle/uitemplate/preset/PreSetWordManager;->e(Ljava/lang/String;Ln55;)V|search_hotword 热词天擎曝光上报
+Lcom/autonavi/bundle/uitemplate/preset/PreSetWordManager;->d(Lp75;)V|search_hotword 热词本地计数
+Lcom/autonavi/bundle/amaphome/components/searchbar/BaseSearchBar;->uploadPreSetWordTracker(Lp75;)V|search_hotword 热词天擎曝光上报(17.02从PreSetWordManager#e挪到BaseSearchBar)
 Lcom/autonavi/bundle/uitemplate/ajx/ModuleSlideContainer;->responsePreSetWords(Ljava/lang/String;)V|search_hotword AJX热词回填(第二道保险)
 Lcom/autonavi/minimap/alimama/AlimamaRequestHolder;->sendH5Log(Lcom/autonavi/minimap/alimama/param/H5LogRequest;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V|h5_ad_log H5广告监测(2参重载)
 Lcom/autonavi/minimap/alimama/AlimamaRequestHolder;->sendH5Log(Lcom/autonavi/minimap/alimama/param/H5LogRequest;Lcom/autonavi/minimap/falcon/base/a;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V|h5_ad_log H5广告监测(3参重载)
 Lcom/autonavi/minimap/basemap/floatinglayer/FloatingLayerManager;->a(Ljava/lang/String;Ljava/lang/String;Lorg/json/JSONObject;Lcom/autonavi/minimap/basemap/floatinglayer/FloatingLayerManager$b;)Ljava/lang/String;|map_float_layer 运营浮层注册(返回"")
-La8;->run()V|msg_image_text 图文素材下载任务(混淆类,字符串锚定,SIG监控)
+Ln8;->run()V|msg_image_text 图文素材下载任务(混淆类,字符串锚定,SIG监控)
 Lcom/amap/bundle/appupgrade/config/downloader/UpdateHintConfigDownloader;->a()V|popup_clean 升级提示配置下载
-Lcx1;->addToQueue(Lcom/autonavi/bundle/amaphome/model/DialogConflictInfo;)Z|popup_clean 首页弹窗冲突队列(接口实现类,混淆类)
-Lcom/autonavi/minimap/track/b;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lcom/autonavi/minimap/entity/SplashButtonInfo;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Le72;ZLjava/lang/String;)V|track_suppress 开屏曝光埋点
-Lcom/autonavi/minimap/track/b;->f(Ljava/lang/String;Ljava/lang/String;Ljava/util/ArrayList;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Lcom/autonavi/minimap/entity/SplashButtonInfo;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;ILjava/lang/String;Le72;ZLjava/lang/String;)V|track_suppress 开屏埋点聚合+三方监测
+Lry1;->addToQueue(Lcom/autonavi/bundle/amaphome/model/DialogConflictInfo;)Z|popup_clean 首页弹窗冲突队列(接口实现类,混淆类)
+Lcom/autonavi/minimap/track/b;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lcom/autonavi/minimap/entity/SplashButtonInfo;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Lo82;ZLjava/lang/String;)V|track_suppress 开屏曝光埋点
+Lcom/autonavi/minimap/track/b;->f(Ljava/lang/String;Ljava/lang/String;Ljava/util/ArrayList;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Lcom/autonavi/minimap/entity/SplashButtonInfo;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;ILjava/lang/String;Lo82;ZLjava/lang/String;)V|track_suppress 开屏埋点聚合+三方监测
 Lcom/autonavi/minimap/track/SplashLogManager;->a(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V|track_suppress 开屏日志上传
 Lcom/ut/mini/UTTracker;->send(Ljava/util/Map;)V|track_suppress UT统计总出口
 Lcom/ut/mini/UTTracker;->sendLog(Ljava/util/Map;ILjava/util/List;)V|track_suppress UT落盘/转发入口
@@ -420,7 +422,7 @@ Lcom/autonavi/minimap/bundle/activities/ActivitiesService;->openOpetationsActivi
 Lcom/autonavi/minimap/bundle/activities/ActivitiesService;->openOpetationsActivities(Lcom/autonavi/map/fragmentcontainer/page/AbstractBasePage;Ljava/lang/String;Ljava/lang/String;Z)V|ops_activity 活动打开入口(4参重载)
 Lcom/alipay/android/phone/mobilesdk/permission/guide/PermissionGuideFloatShow;->showNotificationGuide(Lcom/alipay/android/phone/mobilesdk/permission/guide/PermissionGuideRequest;)V|notify_guide 通知权限底部浮条(不展示)
 Lcom/alipay/android/phone/mobilesdk/permission/guide/sys/SysPermissionGuideFloatMode;->showFloatWithSysCore()V|notify_guide 系统浮条(仅通知权限跳过)
-Lso2;->i(Landroid/app/Activity;Lorg/json/JSONObject;Ljava/lang/String;)V|notify_guide 权限请求参数桥(permissionType改写)
+Lpp2;->i(Landroid/app/Activity;Lorg/json/JSONObject;Ljava/lang/String;)V|notify_guide 权限请求参数桥(permissionType改写)
 Lcom/amap/bundle/badgesystem/ajxmodule/AjxModuleBadge;->getAllSessionList(ZLcom/autonavi/minimap/ajx3/core/JsFunctionCallback;)V|msg_center AJX会话列表清空(回调{"convList":[]})
 Lcom/amap/bundle/badgesystem/ajxmodule/AjxModuleBadge;->getBadgeInfo(Ljava/lang/String;)Ljava/lang/String;|msg_center 消息Tab角标归零({"value":0})
 Lcom/autonavi/minimap/ajx3/modules/internalmodules/AjxModuleLocalStorage;->getItemSync(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;|msg_center 最近消息缓存清空(message_tab/recentlyMsgList-*)
@@ -431,7 +433,7 @@ echo "APK: $TARGET_APK"
 echo "APK 指纹: size=$APK_SIZE mtime=${APK_MTIME:-unknown} sha256(前16位)=$APK_SHA"
 echo "缓存: $CACHE"
 # ── 版本校验：与清单实测版本比对，只警告不中断 ────────────────────
-EXPECTED_VERSION="17.01.0.2012"
+EXPECTED_VERSION="17.02.0.2010"
 VERSION_NAME=""
 if [ -n "$AAPT2" ]; then
   VERSION_NAME=$("$AAPT2" dump badging "$TARGET_APK" 2>/dev/null | sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)
@@ -475,7 +477,7 @@ while IFS='|' read -r full feat; do
   # 混淆类字符串锚定 SIG 监控：签名在但方法体锚点丢了，运行时 DexKit 会定位失败
   anchor_note=""
   case "$full" in
-    'Lze5;->attemptRequestData(IZ)V')
+    'Lah5;->attemptRequestData(IZ)V')
       anchor_hit=$(count "SELECT count(*) FROM method_strings WHERE method='$full' AND value LIKE '%不发送请求%'") || exit 3
       if [ "${anchor_hit:-0}" = "0" ]; then
         printf '%-8s %-78s %s\n' "SIG" "${full#*->}  (锚点字符串丢失,需换锚)" "$feat"
@@ -484,7 +486,7 @@ while IFS='|' read -r full feat; do
       fi
       anchor_note=" [锚点OK]"
       ;;
-    'La8;->run()V')
+    'Ln8;->run()V')
       # 与运行时 Anchors.java 对齐：DexKit 的 addUsingString 是 AND 语义，
       # "invalid download item: "（含尾空格）与 "ImageTextMessageDownloader"
       # 两条必须同时命中；只查其中一条会把运行时挂不上的情况误判成 OK。

@@ -20,7 +20,10 @@ import io.github.libxposed.api.XposedModule;
  *      2 参 (SplashScreenRequest, AosResponseCallback)
  *    注意调研清单里 3 参的 falcon 参数写作 com.amap.bundle.falcon.base.a，
  *    dexsql 实测该类不存在，实际是 com.autonavi.minimap.falcon.base.a —— 以 dexsql 为准。
- * 2) 混淆类 Lze5;->attemptRequestData(IZ)V 不调用 —— 开屏广告请求调度。
+ * 2) 混淆类 Lah5;->attemptRequestData(IZ)V 不调用 —— 开屏广告请求调度。
+ *    17.02.0.2010 实测：旧类名 Lze5; 改为 Lah5;，方法名/签名与锚点串不变；
+ *    兄弟混淆类 Lye5;->run()V（同锚点串"不发送请求：拿不到锁"）改名为 Lzg5;，
+ *    DexKit 兜底仍按方法名/参数消歧，不受影响。
  *    定位：类名列表优先（check-mounts 查出新名后追加，Class.forName 毫秒级命中），
  *    DexKit 方法体字符串锚定（"不发送请求" 特征串）仅作兜底（native 加载 + 全量
  *    扫描，冷启动开销大）；两路都失败记 skip，fail-open。
@@ -34,10 +37,11 @@ final class SplashRequestHooks {
     private static final String CALLBACK = "com.amap.bundle.aosservice.response.AosResponseCallback";
 
     /**
-     * attemptRequestData 兜底类名列表：dex 描述符 Lze5; → Java 名 ze5（默认包）。
+     * attemptRequestData 兜底类名列表：dex 描述符 Lah5; → Java 名 ah5（默认包，
+     * 17.02.0.2010 实测；17.01.0.2012 为 Lze5;）。
      * 高德升级后用 check-mounts.sh 体检 + dexsql 字符串反查出新名，追加到这里。
      */
-    private static final String[] ATTEMPT_CLASS_NAMES = {"ze5"};
+    private static final String[] ATTEMPT_CLASS_NAMES = {"ah5"};
 
     private static final String ATTEMPT_METHOD = "attemptRequestData";
 
@@ -47,7 +51,7 @@ final class SplashRequestHooks {
     static void install(XposedModule module, ClassLoader cl) {
         Feature f = Feature.SPLASH_REQUEST;
         try {
-            // 先挂便宜的非混淆挂载点，再做 Lze5 定位（类名列表优先，DexKit 兜底）。
+            // 先挂便宜的非混淆挂载点，再做 Lah5 定位（类名列表优先，DexKit 兜底）。
             Class<?> holder = HookKit.findClass(module, f, cl, ALIMAMA);
             Class<?> request = HookKit.findClass(module, f, cl, REQUEST);
             Class<?> falcon = HookKit.findClass(module, f, cl, FALCON);
@@ -67,8 +71,8 @@ final class SplashRequestHooks {
             }
 
             Method attempt = resolveAttemptRequestData(module, f, cl);
-            HookKit.install(module, f, "Lze5#attemptRequestData(IZ)", attempt,
-                    HookKit.skipVoid(module, f, "Lze5#attemptRequestData(IZ)"));
+            HookKit.install(module, f, "Lah5#attemptRequestData(IZ)", attempt,
+                    HookKit.skipVoid(module, f, "Lah5#attemptRequestData(IZ)"));
         } catch (Throwable t) {
             HookKit.error(module, f.id + " install aborted", t);
         }
@@ -111,7 +115,7 @@ final class SplashRequestHooks {
 
         HookKit.warn(module, f.id + " skip: attemptRequestData not found (class-name list "
                 + java.util.Arrays.toString(ATTEMPT_CLASS_NAMES) + " + dexkit anchor)");
-        HookState.markNotFound(f, "Lze5#attemptRequestData 锚定失败");
+        HookState.markNotFound(f, "Lah5#attemptRequestData 锚定失败");
         return null;
     }
 }

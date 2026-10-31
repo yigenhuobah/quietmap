@@ -48,12 +48,35 @@ versionCode: `11`
 大小: `4,077,344 字节`
 SHA-256: `a59d7c8357a290d2ade1b2345456b87159af3ddda84165b7223da397f159259b`
 
-## 未发布
+## 0.8.3 - 2026-10-31
+
+高德 17.02.0.2010 适配版本（versionCode 12）：新增关于页「隐藏桌面图标」开关；随设备高德从 17.01.0.2012 升级到 17.02.0.2010，用 dexsql 重定位 12 个签名漂移的挂载点，63 项挂载点体检 63/63 OK（0 SIG / 0 GONE）。功能清单不变（22 项）。
 
 ### 新增
 
 - **关于页「隐藏桌面图标」开关**：桌面图标的 LAUNCHER 入口从 `MainActivity` 拆到 `activity-alias`（`com.quietmap.app.LauncherEntry`），`MainActivity` 改挂 `de.robv.android.xposed.category.MODULE_SETTINGS`。开关只禁用 alias，主入口仍在，隐藏后可从 LSPosed 管理器打开关于页恢复；`DONT_KILL_APP` 保证改组件状态不会连带杀进程。
 - 新增 `LauncherIconTest`：状态映射纯函数 6 条 + manifest 契约 1 条（alias 存在、`targetActivity` 指向 `MainActivity`、`MainActivity` 保留 `MODULE_SETTINGS`）。
+
+### 适配：高德 17.02.0.2010（12 个挂载点重定位，dexsql 实测）
+
+12 条 SIG 挂载点的旧 → 新映射（混淆名整体改名为主，方法名/锚点串基本未动）：
+
+| # | 挂载点 | 17.01.0.2012（旧） | 17.02.0.2010（新） |
+|---|---|---|---|
+| 1 | splash_request 请求调度 | `Lze5;->attemptRequestData(IZ)V` | `Lah5;->attemptRequestData(IZ)V`（锚点串"不发送请求"仍在；同锚兄弟类 Lye5 → Lzg5） |
+| 2 | home_msg_filter 消息拉取(2参) | `MessageBoxManager#getMessages(...;ZLxf2;)V` | 参数类型改名 `Lzg2;` |
+| 3 | home_msg_filter 消息拉取(3参) | `...getMessages(...;ZZLxf2;)V` | 参数类型改名 `Lzg2;` |
+| 4 | home_msg_filter 消息拉取(4参) | `...getMessages(...;ZZLxf2;Ljava/lang/String;)V` | 参数类型改名 `Lzg2;` |
+| 5 | home_msg_filter 主图投放 | `Llt1;->start(Activity,AmapMessage)V` | `Lev1;->start(...)`（class_interfaces 反查 IDeliveryDisplay 唯一实现类） |
+| 6 | search_hotword 热词本地计数 | `PreSetWordManager#d(Ln55;)V` | `d(Lp75;)V`（方法体串 "setPreSetWord obj="/"yyyy-MM-dd" 一致） |
+| 7 | search_hotword 热词天擎曝光上报 | `PreSetWordManager#e(Ljava/lang/String;Ln55;)V` | **挪了类**：`BaseSearchBar#uploadPreSetWordTracker(Lp75;)V`（锚点串 "thirdTrackRequest 天擎 曝光" 不变；PreSetWordManager 已无 e 方法） |
+| 8 | msg_image_text 素材下载 | `La8;->run()V` | `Ln8;->run()V`（双锚点串 "invalid download item: "+"ImageTextMessageDownloader" 仍在） |
+| 9 | popup_clean 弹窗冲突队列 | `Lcx1;->addToQueue(DialogConflictInfo)Z` | `Lry1;->addToQueue(...)`（class_interfaces 反查 IDialogConflictMgr 唯一实现类） |
+| 10 | track_suppress 开屏曝光埋点 | `track.b#e(...Le72;Z...)V` | 混淆参数类型改名 `Lo82;`（19 参结构不变） |
+| 11 | track_suppress 开屏埋点聚合 | `track.b#f(...Le72;Z...)V` | 混淆参数类型改名 `Lo82;`（20 参结构不变） |
+| 12 | notify_guide 权限参数桥 | `Lso2;->i(Activity,JSONObject,String)V` | `Lpp2;->i(...)`（方法体字符串集合逐条一致，旧 Lso2; 已被无关类占用） |
+
+同步更新：`hooks/` 各挂载点常量与注释、`tools/check-mounts.sh` 内置 63 条期望签名与版本断言（EXPECTED_VERSION=17.02.0.2010）、`VersionGate.SUPPORTED_VERSION`、README 目标版本。DexKit 兜底锚点串（"不发送请求"、"invalid download item: "+"ImageTextMessageDownloader"）经 method_strings 复测全部仍在，`Anchors.java` 注释同步。全部 12 条均为 dexsql 直接定位（未动用 jadx）。
 
 ### 注意
 
@@ -61,9 +84,18 @@ SHA-256: `a59d7c8357a290d2ade1b2345456b87159af3ddda84165b7223da397f159259b`
 
 ### 验证
 
-- 单测 195 个用例通过（0 失败 / 0 跳过）；`:app:lintDebug` 通过。
+- 单测 222 个用例通过（`:app:testDebugUnitTest`，0 失败 / 0 跳过 / 0 错误）；`:app:lintDebug` 通过（22 条 warning、0 error）。
+- `tools/check-mounts.sh` 对高德 17.02.0.2010（`base.apk` sha256 前 16 位 `768d62ee138771c0`，aapt2 读出 versionName 17.02.0.2010）共 63 项：**OK 63 / SIG 0 / GONE 0**；两条混淆锚点监控（`Lah5#attemptRequestData`、`Ln8#run`）均显示 `[锚点OK]`。
+- 12 条 SIG 均用 dexsql（`query-cache` 对 `tools/.dexsql-cache/768d62ee138771c0/cache.dxc2`）定位：methods 精确签名反查、method_strings 锚点反查、class_interfaces 接口实现类反查；未使用 jadx。
 - 真机（24129PN74C / HyperOS 4.0 / Android 17 / LSPosed 2.2.1）：打开开关 → `disabledComponents` 出现 `LauncherEntry`、`resolve-activity -c android.intent.category.LAUNCHER` 返回 `No activity found`；关闭 → 恢复为 `LauncherEntry`。
 - 隐藏状态下 `-c de.robv.android.xposed.category.MODULE_SETTINGS` 仍解析到 `MainActivity`（自锁风险已实测排除）；切到别的 tab 再回关于页，开关状态与系统一致；无 FATAL/ANR。
+- `tools/verify-apk.sh` PASS（17 个 `[ok]`、0 失败）：versionCode=12、versionName=0.8.3、签名证书 SHA-256 与 0.8.1/0.8.2 一致。
+- `:app:assembleRelease` 通过。
+
+APK: `quietmap-0.8.3.apk`
+versionCode: `12`
+大小: `4,082,484 字节`
+SHA-256: `0a08219406a81e1ea32bb512d08a79236c3b7ca7400cb0735c9a4243e403046f`
 
 ## v0.8.1 — 2026-10-28
 

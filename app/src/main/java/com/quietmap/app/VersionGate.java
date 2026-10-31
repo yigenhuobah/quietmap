@@ -8,8 +8,8 @@ package com.quietmap.app;
  */
 public final class VersionGate {
 
-    /** 高德地图 17.01.0.2012：当前全部挂载点的实测版本。 */
-    public static final String SUPPORTED_VERSION = "17.01.0.2012";
+    /** 高德地图 17.02.0.2010：当前全部挂载点的实测版本（63/63 OK，2026-10-31）。 */
+    public static final String SUPPORTED_VERSION = "17.02.0.2010";
 
     private VersionGate() {
     }

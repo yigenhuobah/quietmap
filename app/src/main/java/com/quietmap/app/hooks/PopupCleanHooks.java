@@ -9,16 +9,17 @@ import io.github.libxposed.api.XposedModule;
 /**
  * popup_clean 弹窗净化（升级提示配置 + 首页弹窗冲突队列）。
  *
- * dexsql 实测（高德 17.01.0.2012）：
+ * dexsql 实测（高德 17.02.0.2010；17.01.0.2012 挂载点同构，仅实现类混淆名
+ * Lcx1; → Lry1;）：
  *
  * 1) UpdateHintConfigDownloader#a()V —— 升级提示配置下载（方法体含
  *    "update_hint_apk_newest_version" 等 prefs 键），不调用即不下载/刷新
  *    升级提示配置。纯配置下载，无 UI 副作用。
  *
  * 2) IDialogConflictMgr#addToQueue(DialogConflictInfo)Z —— 接口方法，
- *    实现类是**混淆类 Lcx1;**（dexsql class_interfaces 反查：
- *    file_id=7, class_idx=10477，唯一实现）。接口层 hook 无效
- *    （ART 走 itable 分派），必须挂 Lcx1#addToQueue。
+ *    实现类是**混淆类 Lry1;**（dexsql class_interfaces 反查：唯一实现，
+ *    17.01.0.2012 为 Lcx1;）。接口层 hook 无效
+ *    （ART 走 itable 分派），必须挂 Lry1#addToQueue。
  *    返回 false = 不入队、不展示。
  *
  * 中风险说明（实测调用点，务必保留开关回退）：
@@ -40,8 +41,8 @@ final class PopupCleanHooks {
     private static final String UPDATE_HINT =
             "com.amap.bundle.appupgrade.config.downloader.UpdateHintConfigDownloader";
 
-    /** IDialogConflictMgr 的唯一实现类（dexsql class_interfaces 实测，混淆名）。 */
-    private static final String DIALOG_CONFLICT_IMPL = "cx1";
+    /** IDialogConflictMgr 的唯一实现类（dexsql class_interfaces 实测，混淆名；旧版 Lcx1;）。 */
+    private static final String DIALOG_CONFLICT_IMPL = "ry1";
     private static final String DIALOG_CONFLICT_INFO =
             "com.autonavi.bundle.amaphome.model.DialogConflictInfo";
 
@@ -62,9 +63,9 @@ final class PopupCleanHooks {
             Class<?> info = HookKit.findClass(module, f, cl, DIALOG_CONFLICT_INFO);
             if (impl != null && info != null) {
                 Method addToQueue = HookKit.findMethod(module, f, impl, "addToQueue", info);
-                HookKit.install(module, f, "Lcx1#IDialogConflictMgr.addToQueue", addToQueue,
+                HookKit.install(module, f, "Lry1#IDialogConflictMgr.addToQueue", addToQueue,
                         HookKit.constBool(module, f,
-                                "Lcx1#IDialogConflictMgr.addToQueue", false));
+                                "Lry1#IDialogConflictMgr.addToQueue", false));
             }
         } catch (Throwable t) {
             HookKit.error(module, f.id + " install aborted", t);
