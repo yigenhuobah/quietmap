@@ -323,6 +323,40 @@ public class ReportStateTest {
                 picked.critical("splash_gate"));
     }
 
+    @Test
+    public void pickUsesNewestCrashWithoutFallingBackToOldOne() {
+        String crash = "1710000000000|main|java.lang.NullPointerException";
+        Map<String, String> fileData = Collections.singletonMap(
+                ReportProtocol.KEY_CRASH_0, "");
+        Map<String, String> providerData = Collections.singletonMap(
+                ReportProtocol.KEY_CRASH_0, crash);
+
+        ReportState provider = ReportState.fromProvider(providerData, 1_000L);
+        ReportState clearedByFile = ReportState.pick(
+                entry(2_000L, 2_000L, fileData), provider);
+        assertEquals("同会话内较新的空 crash 值必须覆盖较旧的非空值（清残留）",
+                "", clearedByFile.value("", ReportProtocol.KEY_CRASH_0));
+
+        ReportState newerProvider = ReportState.fromProvider(providerData, 3_000L);
+        ReportState picked = ReportState.pick(
+                entry(2_000L, 2_000L, fileData), newerProvider);
+        assertEquals("较旧文件的空 crash 不能覆盖较新的非空值",
+                crash, picked.value("", ReportProtocol.KEY_CRASH_0));
+    }
+
+    @Test
+    public void pickKeepsCrashPresentInOnlyOneSource() {
+        ReportState provider = ReportState.fromProvider(
+                Collections.singletonMap("reg.splash_gate", "x"), 2_000L);
+        ReportState picked = ReportState.pick(
+                entry(1_000L, 1_000L, Collections.singletonMap(
+                        ReportProtocol.KEY_CRASH_0, "1710000000000|main|IllegalState")),
+                provider);
+        assertEquals("只有文件带 crash 时保留该值",
+                "1710000000000|main|IllegalState",
+                picked.value("", ReportProtocol.KEY_CRASH_0));
+    }
+
     private static ReportFileStore.Entry entry(long mtime, long updatedAt,
                                                String key, String value) {
         return entry(mtime, updatedAt, Collections.singletonMap(key, value));

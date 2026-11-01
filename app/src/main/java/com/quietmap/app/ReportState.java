@@ -103,8 +103,8 @@ public final class ReportState {
     /**
      * 文件与 prefs 按 key 合并，而不是整源二选一：
      * - 两个源都有的 key：hit/entry 计数取最大值；reg/skip 取较新源的值，
-     *   较新值为空时回退较旧的非空值（更完整）；crit 严格取较新源的值
-     *   （空串也必须覆盖旧值，否则旧 crit=1 清不掉）；
+     *   较新值为空时回退较旧的非空值（更完整）；crit 与 crash0/1/2 严格取
+     *   较新源的值（空串也必须覆盖旧值，否则旧 crit=1 / 旧崩溃清不掉）；
      * - 只有一个源有的 key：保留该值；
      * - 返回状态的 source/path/updatedAt/session 取时间较新的源。
      * - 文件 session 与 prefs（当前主进程）session 不一致时，文件整份忽略，
@@ -144,6 +144,11 @@ public final class ReportState {
                 // crit 必须完全按“最新值覆盖”：较新来源的空串代表功能已恢复，
                 // 不能像 reg/skip 那样回退旧的非空值，否则旧 crit=1 永远清不掉。
                 merged.put(key, fileNewer ? fromFile : fromProvider);
+            } else if (isCrashKey(key)) {
+                // crash0/1/2 与 crit 同语义：写侧始终发送、无崩溃发空串
+                // （见 hooks/Report.snapshot），空串必须能清掉上一轮残留的崩溃，
+                // 所以同样严格取较新值，不回退旧的非空值。
+                merged.put(key, fileNewer ? fromFile : fromProvider);
             } else if (fileNewer) {
                 merged.put(key, preferNonEmpty(fromFile, fromProvider));
             } else {
@@ -167,6 +172,13 @@ public final class ReportState {
         long left = a == null ? 0L : a;
         long right = b == null ? 0L : b;
         return String.valueOf(ReportProtocol.mergeHit(left, right));
+    }
+
+    /** crash0/1/2 是无前缀的固定键；与 crit 一样按“最新值覆盖”合并。 */
+    private static boolean isCrashKey(String key) {
+        return ReportProtocol.KEY_CRASH_0.equals(key)
+                || ReportProtocol.KEY_CRASH_1.equals(key)
+                || ReportProtocol.KEY_CRASH_2.equals(key);
     }
 
     /** 较新值优先；较新值为空串时用较旧的非空值，避免“较新”把已有信息清空。 */
