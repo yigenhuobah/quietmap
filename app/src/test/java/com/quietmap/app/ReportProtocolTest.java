@@ -23,7 +23,7 @@ public class ReportProtocolTest {
     }
 
     @Test
-    public void validKeyAcceptsAll110GeneratedKeys() {
+    public void validKeyAcceptsAll113GeneratedKeys() {
         int count = 0;
         for (Feature f : Feature.values()) {
             assertTrue(ReportProtocol.validKey(ReportProtocol.PREFIX_REG + f.key));
@@ -33,7 +33,41 @@ public class ReportProtocolTest {
             assertTrue(ReportProtocol.validKey(ReportProtocol.PREFIX_CRIT + f.key));
             count += 5;
         }
-        assertEquals(110, count);
+        // crash0/1/2 是白名单里的固定键（非 Feature 派生）。
+        assertTrue(ReportProtocol.validKey(ReportProtocol.KEY_CRASH_0));
+        assertTrue(ReportProtocol.validKey(ReportProtocol.KEY_CRASH_1));
+        assertTrue(ReportProtocol.validKey(ReportProtocol.KEY_CRASH_2));
+        count += 3;
+        assertEquals(113, count);
+    }
+
+    /**
+     * crash 回传键：固定键名白名单只开 3 个槽位，值仍受 MAX_VALUE=256 上限
+     * （生产端截 240）；不是计数键，主进程按文本最新值覆盖（空串清旧崩溃），
+     * 子进程回传一律丢弃（UEH 只装在主进程）。
+     */
+    @Test
+    public void crashKeysAreFixedWhitelistKeysMergingAsLatestText() {
+        assertEquals("crash0", ReportProtocol.KEY_CRASH_0);
+        assertEquals("crash1", ReportProtocol.KEY_CRASH_1);
+        assertEquals("crash2", ReportProtocol.KEY_CRASH_2);
+        assertFalse("只保留 3 个 crash 槽位", ReportProtocol.validKey("crash3"));
+        assertFalse("裸 crash 不是合法键", ReportProtocol.validKey("crash"));
+        assertTrue("240 字符崩溃文本（生产端截断上限）合法",
+                ReportProtocol.isValidValue("c".repeat(240)));
+        assertFalse("crash 键不豁免 256 上限", ReportProtocol.isValidValue("c".repeat(257)));
+        assertFalse("crash 不是计数键：走文本最新值覆盖",
+                ReportProtocol.isCountKey(ReportProtocol.KEY_CRASH_0));
+        assertTrue("主进程可写 crash 键",
+                ReportProtocol.acceptFromProcess(true, ReportProtocol.KEY_CRASH_0));
+        assertFalse("子进程 crash 回传必须忽略",
+                ReportProtocol.acceptFromProcess(false, ReportProtocol.KEY_CRASH_0));
+        assertTrue("新崩溃文本覆盖旧值",
+                ReportProtocol.valueChanged(ReportProtocol.KEY_CRASH_0, "old", "new"));
+        assertTrue("无崩溃槽位回传空串必须清掉旧崩溃",
+                ReportProtocol.valueChanged(ReportProtocol.KEY_CRASH_0, "old", ""));
+        assertFalse("相同崩溃文本不触发写入",
+                ReportProtocol.valueChanged(ReportProtocol.KEY_CRASH_1, "old", "old"));
     }
 
     @Test

@@ -65,7 +65,7 @@
 |---|---|---|
 | PV-01 | `bg_awaken_report` | 唤端上报断源 |
 | PV-02 | `bg_utdid_upload` | 设备指纹上传与服务端交换断源 |
-| PV-03 | `h5_install_apk` | H5 静默下载安装 APK 断源 |
+| PV-03 | `h5_install_apk` | H5/推广静默下载安装 APK 断源（推广分发器推广分支不调用，官方升级不受影响） |
 | PV-04 | `track_suppress` | 开屏埋点、开屏日志与 UT 统计上报断源 |
 
 `popup_clean` 属于中风险项：它拦截的是首页通用弹窗冲突队列，可能连带吞掉功能引导、分享口令等业务弹窗。遇到异常弹窗缺失时单独关闭这一项即可。
@@ -172,7 +172,7 @@ bash tools/check-mounts.sh "E:\path\to\amap.apk"
 | 4.6 隐私二次弹窗 | 有意不做 | — | 合规必须 |
 | 4.7 权限索取 | 有意不做 | — | 影响定位权限流 |
 | 5.1 `AlimamaRequestHolder.sendH5Log` | 已覆盖 | 批4 `h5_ad_log` | 2/3 参重载全挂 |
-| 5.2 H5 下载插件 / `installApk` | 部分覆盖 | 批1 `h5_install_apk` | 只拦静默安装，不阻断用户主动下载 |
+| 5.2 H5 下载插件 / `installApk` | 已覆盖 | 批1 `h5_install_apk` | 旧挂载点 17.02 死代码；0.8.5 重定位挂混淆分发器 `Lec0#dispatch` 推广分支（scheme/extras/失败重试），官方升级分支放行 |
 | 5.3 `FloatingLayerManager.a` | 已覆盖 | 批4 `map_float_layer` | 返回空串，不注册 |
 | 5.4 开屏视频/扫光挂件 | 已覆盖（间接） | 批2 `splash_gate`/`splash_request` | 开屏不展示，挂件不出现 |
 | 5.5 `ImageTextMessageDownloader` 下载任务 | 已覆盖 | 批4 `msg_image_text` | 挂混淆 Runnable `La8` |

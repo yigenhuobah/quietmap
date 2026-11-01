@@ -31,7 +31,8 @@ import java.util.concurrent.Executors;
  *
  * key 形如 reg.bg_msg_fetch / hit.bg_msg_fetch / entry.bg_msg_fetch /
  * skip.bg_msg_fetch / crit.bg_msg_fetch，value 对应注册标签、命中计数、
- * 入口计数、跳过原因与整体失效标记。
+ * 入口计数、跳过原因与整体失效标记；另有固定键 crash0/crash1/crash2
+ * （最近崩溃，crash0 最新），与 reg/skip 一样按最新值覆盖、空串清残留。
  *
  * 会话语义：新主进程 session 首次写入前清掉上一会话数据。session 只做身份
  * 比较（不同即新会话），不比较启动毫秒——时钟回拨后新会话的时间戳反而更早，
@@ -147,11 +148,12 @@ public final class StatusProvider extends ContentProvider {
      * 诊断数据落到 SharedPreferences 的唯一入口：Provider.call 与
      * {@link ReportSocketServer} 共用，保证两条通道的合并语义一致
      * （hit/entry 取历史最大、reg/skip/crit 最新值覆盖、主进程新 session
-     * 清理旧数据；session 按身份比较，不比较启动时间）。
+     * 清理旧数据；session 按身份比较，不比较启动时间）。crash0/1/2 属于
+     * 文本键，同样按最新值覆盖、空串清掉旧崩溃残留。
      *
-     * 进程边界：非主进程只允许合并 hit./entry.，reg./skip./crit. 直接丢弃。
-     * Report 现在只在主进程启动，这里兜住旧版本子进程仍在上报的数据，
-     * 避免“子进程缺少 UI 钩子”的 skip 污染失败统计。
+     * 进程边界：非主进程只允许合并 hit./entry.，reg./skip./crit. 与 crash 键
+     * 直接丢弃。Report 现在只在主进程启动（UEH 也只装在主进程），这里兜住
+     * 旧版本子进程仍在上报的数据，避免“子进程缺少 UI 钩子”的 skip 污染失败统计。
      *
      * 时间戳：主进程的实际变更会刷新 meta.updated_at；内容未变的 5 分钟心跳
      * 也刷新一次，使 failure TTL 不会把仍在正常运行的目标进程判成“未知”。

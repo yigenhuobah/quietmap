@@ -10,6 +10,8 @@ import com.quietmap.app.HookState;
 
 import org.junit.Test;
 
+import java.lang.reflect.Method;
+
 /**
  * INSTALLERS 注册完整性：非 blocked Feature 必须全部有安装器，
  * blocked Feature 不得注册、也不得被 installAll 安装。
@@ -42,8 +44,121 @@ public class HooksTest {
             assertFalse("blocked Feature 不应被安装: " + f.id,
                     Hooks.shouldInstall(f, false));
         }
-        // 当前 blocked 项 = AD-03/AD-05/PV-03（17.02 挂载点不可用，见 Feature.blockedReason）；
+        // 当前 blocked 项 = AD-03/AD-05（17.02 挂载点不可用，见 Feature.blockedReason）；
+        // PV-03 已于 0.8.4 重定位（Lec0#dispatch 推广分支门控），不再 blocked。
         // 未来新增 blocked 项时同样自动校验这三条规则。
+    }
+
+    /**
+     * PV-03 重定位（0.8.4）：推广下载分发门控挂在混淆类 Lec0#dispatch 上
+     * （实现 IIntentInterceptor），拦截判定与原方法 smali 分支同构——
+     * 只吞三个推广分支，官方 checkappupdate 分支与空 action 放行。
+     */
+    @Test
+    public void pv03PromoBranchDetectionMatchesDispatchBranches() {
+        // ① appDownloadfail 重试前缀（appDownloadfail0/1/2）
+        assertTrue(H5InstallApkHooks.isPromoDownloadBranch(
+                "appDownloadfail0", null, null, null, null));
+        assertTrue(H5InstallApkHooks.isPromoDownloadBranch(
+                "appDownloadfail2", null, null, null, null));
+        // ② extras appDownloadUrl + appDownloadName 双非空
+        assertTrue(H5InstallApkHooks.isPromoDownloadBranch(
+                "some.action", "https://example.com/x.apk", "某App", null, null));
+        // ③ scheme：host=openFeature + featureName=DownloadApp（均忽略大小写）。
+        // 原分发器对空 action 直接 return false（label_0014），scheme 分发实际
+        // 携带 ACTION_VIEW，用例以真实 action 形态覆盖该分支。
+        assertTrue(H5InstallApkHooks.isPromoDownloadBranch(
+                "android.intent.action.VIEW", null, null, "openfeature", "DownloadApp"));
+        assertTrue(H5InstallApkHooks.isPromoDownloadBranch(
+                "android.intent.action.VIEW", null, null, "openFeature", "downloadapp"));
+        // 官方 checkappupdate 分支永远放行（优先级高于 ②③，与原 label_0070 一致）
+        assertFalse(H5InstallApkHooks.isPromoDownloadBranch(
+                "action.autonavi.checkappupdate", "https://example.com/x.apk", "某App",
+                "openFeature", "DownloadApp"));
+        // 空/缺失 action：原方法 return false，不吞（拦截器链照常继续分派）
+        assertFalse(H5InstallApkHooks.isPromoDownloadBranch(
+                null, "https://example.com/x.apk", "某App", null, null));
+        assertFalse(H5InstallApkHooks.isPromoDownloadBranch(
+                "", "https://example.com/x.apk", "某App", null, null));
+        // 单边 extras 不构成推广入口
+        assertFalse(H5InstallApkHooks.isPromoDownloadBranch(
+                "some.action", "https://example.com/x.apk", null, null, null));
+        assertFalse(H5InstallApkHooks.isPromoDownloadBranch(
+                "some.action", null, "某App", null, null));
+        // host 对但 featureName 缺/不对、或 host 不对
+        assertFalse(H5InstallApkHooks.isPromoDownloadBranch(
+                "android.intent.action.VIEW", null, null, "openFeature", null));
+        assertFalse(H5InstallApkHooks.isPromoDownloadBranch(
+                "android.intent.action.VIEW", null, null, "other.host", "DownloadApp"));
+    }
+
+    /**
+     * 快路径命中校验：boolean dispatch(Intent) 形状 + IIntentInterceptor 类型。
+     * 混淆短名被复用成无关类时必须拒收（降级 DexKit 锚点定位），否则会把无关
+     * dispatch 整段吞掉还显示 hit。
+     */
+    @Test
+    public void pv03DispatcherValidationAcceptsIIntentInterceptorImplOnly() throws Exception {
+        Method good = Pv03Fixture.Impl.class.getDeclaredMethod(
+                "dispatch", android.content.Intent.class);
+        assertTrue(H5InstallApkHooks.isDispatchShape(good));
+        assertTrue(H5InstallApkHooks.isDispatcherDispatch(good, Pv03Fixture.Interceptor.class));
+
+        // 同形状但不实现 IIntentInterceptor：拒收
+        Method impostor = Pv03Fixture.NotInterceptor.class.getDeclaredMethod(
+                "dispatch", android.content.Intent.class);
+        assertTrue(H5InstallApkHooks.isDispatchShape(impostor));
+        assertFalse(H5InstallApkHooks.isDispatcherDispatch(impostor, Pv03Fixture.Interceptor.class));
+
+        // 接口加载失败（null）：一律拒收，宁可 miss 不误吞
+        assertFalse(H5InstallApkHooks.isDispatcherDispatch(good, null));
+    }
+
+    @Test
+    public void pv03DispatcherValidationRejectsWrongShape() throws Exception {
+        // void 返回值（skipVoid 形状）不是本挂载点的目标
+        Method voidDispatch = Pv03Fixture.WrongShape.class.getDeclaredMethod(
+                "dispatch", android.content.Intent.class);
+        assertFalse(H5InstallApkHooks.isDispatchShape(voidDispatch));
+        assertFalse(H5InstallApkHooks.isDispatcherDispatch(
+                voidDispatch, Pv03Fixture.Interceptor.class));
+        // 双参重载不是本挂载点的目标
+        Method twoArgDispatch = Pv03Fixture.WrongShape.class.getDeclaredMethod(
+                "dispatch", android.content.Intent.class, int.class);
+        assertFalse(H5InstallApkHooks.isDispatchShape(twoArgDispatch));
+        // null Method 不崩溃
+        assertFalse(H5InstallApkHooks.isDispatchShape(null));
+        assertFalse(H5InstallApkHooks.isDispatcherDispatch(null, Pv03Fixture.Interceptor.class));
+    }
+
+    /** PV-03 校验用最小 fixture：与目标分发器同形状的接口/实现/冒名类。 */
+    private static final class Pv03Fixture {
+        private Pv03Fixture() {
+        }
+
+        private interface Interceptor {
+        }
+
+        private static class Impl implements Interceptor {
+            public boolean dispatch(android.content.Intent intent) {
+                return false;
+            }
+        }
+
+        private static class NotInterceptor {
+            public boolean dispatch(android.content.Intent intent) {
+                return false;
+            }
+        }
+
+        private static class WrongShape implements Interceptor {
+            public void dispatch(android.content.Intent intent) {
+            }
+
+            public boolean dispatch(android.content.Intent intent, int flags) {
+                return false;
+            }
+        }
     }
 
     @Test

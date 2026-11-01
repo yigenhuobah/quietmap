@@ -50,10 +50,15 @@ public enum Feature {
     /** 设备指纹上传（UtdidUploadTask upload/uploadFromCache/reqServer）。 */
     BG_UTDID_UPLOAD("PV-02", "bg_utdid_upload", R.string.f_bg_utdid_upload_title,
             R.string.f_bg_utdid_upload_summary, false, Group.PV),
-    /** H5 静默下载安装 APK；17.02 installApk 无调用点（真实安装链 Laa0.a 未覆盖），死钩子不装。 */
+    /**
+     * H5/推广静默下载安装 APK 断源（PV-03 重定位，0.8.4）：
+     * 推广分发器混淆类 Lec0#dispatch 的三个推广分支（openFeature?featureName=DownloadApp
+     * scheme、appDownloadUrl/appDownloadName extras、appDownloadfail 重试）不调用；
+     * 官方 action.autonavi.checkappupdate 分支与升级安装链（q/$j/r/Laa0.a）原样放行。
+     * 旧挂载点 DeviceInfo#installApk 在 17.02 无调用点（死代码），已弃用。
+     */
     H5_INSTALL_APK("PV-03", "h5_install_apk", R.string.f_h5_install_apk_title,
-            R.string.f_h5_install_apk_summary, false, Group.PV,
-            "17.02 DeviceInfo#installApk 无调用点，真实安装链（Laa0.a）未覆盖"),
+            R.string.f_h5_install_apk_summary, false, Group.PV),
     /** 升级弹窗（AppUpgradeController#q）。 */
     POPUP_UPGRADE("UI-01", "popup_upgrade", R.string.f_popup_upgrade_title,
             R.string.f_popup_upgrade_summary, true, Group.UI),

@@ -33,9 +33,11 @@
 # 完整签名取自 dexsql 对高德 17.02.0.2010 的实测（17.01.0.2012 → 17.02.0.2010
 # 重定位 12 条，混淆名旧→新：Lze5→Lah5、Llt1→Lev1、Ln55→Lp75、La8→Ln8、
 # Lcx1→Lry1、Le72→Lo82、Lso2→Lpp2、Lxf2→Lzg2）。
-# 混淆类挂载点（Lah5#attemptRequestData、Ln8#run）另有方法体字符串锚点监控：
-# 签名在但锚点串丢了也判 SIG（运行时 DexKit 按锚点定位会失败）。
+# 混淆类挂载点（Lah5#attemptRequestData、Ln8#run、Lec0#dispatch）另有方法体
+# 字符串锚点监控：签名在但锚点串丢了也判 SIG（运行时 DexKit 按锚点定位会失败）。
 # Ln8 的锚点监控与运行时 Anchors.java 保持一致：两条字符串必须同时命中。
+# Lec0 的锚点监控与运行时 H5InstallApkHooks.DISPATCH_ANCHORS 保持一致：
+# 三条字符串必须同时命中。
 
 set -u
 
@@ -372,7 +374,7 @@ Lcom/taobao/flowcustoms/afc/taoke/AfcTkManager;->registerTkFlag(Landroid/content
 Lcom/ta/audid/upload/UtdidUploadTask;->upload()V|bg_utdid_upload 指纹上传
 Lcom/ta/audid/upload/UtdidUploadTask;->uploadFromCache()V|bg_utdid_upload 指纹缓存上传
 Lcom/ta/audid/upload/UtdidUploadTask;->reqServer(Ljava/lang/String;)Z|bg_utdid_upload 服务端交换
-Lcom/alipay/mobile/common/info/DeviceInfo;->installApk(Ljava/lang/String;)V|h5_install_apk H5静默安装
+Lec0;->dispatch(Landroid/content/Intent;)Z|h5_install_apk 推广APK下载分发(混淆类,字符串锚定"checkappupdate"+"Dispatch App Upgrade"+"appDownloadfail",SIG监控)
 Lcom/amap/bundle/appupgrade/AppUpgradeController;->q(Lcom/amap/bundle/appupgrade/e;ZZ)Z|popup_upgrade 升级弹窗
 Lcom/autonavi/bundle/amaphome/impl/BootBizDataPreloaderImpl;->canShowSplash()Ljava/lang/Boolean;|splash_gate 开屏闸门(返回Boolean.FALSE走NO_SPLASH分支)
 Lcom/autonavi/minimap/impl/SplashScreenServiceImpl;->tryShowSplashView(ILjava/lang/String;)V|splash_gate 展示层兜底(不调用)
@@ -494,6 +496,20 @@ while IFS='|' read -r full feat; do
       anchor_cls_hit=$(count "SELECT count(*) FROM method_strings WHERE method='$full' AND value LIKE '%ImageTextMessageDownloader%'") || exit 3
       if [ "${anchor_hit:-0}" = "0" ] || [ "${anchor_cls_hit:-0}" = "0" ]; then
         printf '%-8s %-78s %s\n' "SIG" "${full#*->}  (与运行时锚点不一致,需核对 Anchors.java)" "$feat"
+        sig=$((sig + 1))
+        continue
+      fi
+      anchor_note=" [锚点OK]"
+      ;;
+    'Lec0;->dispatch(Landroid/content/Intent;)Z')
+      # 与运行时 H5InstallApkHooks.DISPATCH_ANCHORS 对齐：三条字符串交集在全 APK
+      # 内唯一命中本方法（17.02.0.2010 实测），全部命中才判 OK。
+      anchor_action=$(count "SELECT count(*) FROM method_strings WHERE method='$full' AND value LIKE '%action.autonavi.checkappupdate%'") || exit 3
+      anchor_log=$(count "SELECT count(*) FROM method_strings WHERE method='$full' AND value LIKE '%Dispatch App Upgrade%'") || exit 3
+      anchor_fail=$(count "SELECT count(*) FROM method_strings WHERE method='$full' AND value LIKE '%appDownloadfail%'") || exit 3
+      if [ "${anchor_action:-0}" = "0" ] || [ "${anchor_log:-0}" = "0" ] \
+        || [ "${anchor_fail:-0}" = "0" ]; then
+        printf '%-8s %-78s %s\n' "SIG" "${full#*->}  (与运行时锚点不一致,需核对 H5InstallApkHooks)" "$feat"
         sig=$((sig + 1))
         continue
       fi

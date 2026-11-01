@@ -30,7 +30,7 @@ public final class Hooks {
     /**
      * 非 blocked 的 Feature → 安装器映射。用 EnumMap 保证 O(1) 且无哈希冲突；
      * 新增 Feature 忘记注册时 installOne 会打 ERROR 并标「未注册安装器」，不会静默漏挂。
-     * blocked 的 Feature（AD-03/AD-05/PV-03，17.02 无可用挂载点）不注册、不安装。
+     * blocked 的 Feature（AD-03/AD-05，17.02 无可用挂载点）不注册、不安装。
      */
     private static final Map<Feature, Installer> INSTALLERS;
 
@@ -41,6 +41,7 @@ public final class Hooks {
         m.put(Feature.BG_MSG_FETCH, BgMsgFetchHooks::install);
         m.put(Feature.BG_AWAKEN_REPORT, BgAwakenReportHooks::install);
         m.put(Feature.BG_UTDID_UPLOAD, BgUtdidUploadHooks::install);
+        m.put(Feature.H5_INSTALL_APK, H5InstallApkHooks::install);
         m.put(Feature.POPUP_UPGRADE, PopupUpgradeHooks::install);
         m.put(Feature.HOME_BANNER, HomeBannerHooks::install);
         m.put(Feature.HOME_OPERATE_BAR, HomeOperateBarHooks::install);

@@ -1,6 +1,7 @@
 package com.quietmap.app;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
 
 import org.junit.Test;
 
@@ -96,6 +97,33 @@ public class StatusProviderTest {
         ReportState provider = ReportState.fromProvider(
                 data, NOW - ReportProtocol.DEFAULT_TTL_MS);
         assertEquals(1, StatusProvider.failedFeatureCount(provider, f -> true, NOW));
+    }
+
+    /**
+     * crash0/1/2（最近崩溃，crash0 最新）：写入侧经白名单后走 reg/skip 的文本
+     * 覆盖路径（applyReport 通用分支，无 Context 不在本文件直测，语义由
+     * ReportProtocolTest 的 valueChanged/acceptFromProcess 断言锁定）；这里锁定
+     * 读取侧：crash 键经 sanitize 保留、供诊断页展示，且不影响失败统计。
+     */
+    @Test
+    public void crashKeysSurviveSanitizeAndDoNotAffectFailureCount() {
+        Map<String, String> data = new TreeMap<>();
+        data.put("reg.splash_gate", "canShowSplash");
+        data.put(ReportProtocol.KEY_CRASH_0,
+                "1700000000000|main|java.lang.NullPointerException|a.b(C.java:1)|d.e(F.java:2)");
+        data.put(ReportProtocol.KEY_CRASH_1, "");
+        data.put(ReportProtocol.KEY_CRASH_2, "x".repeat(257));
+        ReportState provider = ReportState.fromProvider(data, NOW);
+
+        assertEquals("crash 键经白名单/sanitize 后必须保留",
+                data.get(ReportProtocol.KEY_CRASH_0),
+                provider.value("", ReportProtocol.KEY_CRASH_0));
+        assertEquals("无崩溃槽位的空串原样保留（诊断页据此隐藏该行）", "",
+                provider.value("", ReportProtocol.KEY_CRASH_1));
+        assertNull("超过 256 的 crash 值必须被读侧丢弃",
+                provider.value("", ReportProtocol.KEY_CRASH_2));
+        assertEquals("崩溃记录不改变失败统计", 0,
+                StatusProvider.failedFeatureCount(provider, f -> true, NOW));
     }
 
     private static ReportFileStore.Entry entry(Map<String, String> data) {

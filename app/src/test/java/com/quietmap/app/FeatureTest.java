@@ -135,10 +135,11 @@ public class FeatureTest {
     }
 
     /**
-     * 17.02.0.2010 三个挂载点不可用（复核发现 #85/#93/#106）：PV-03/AD-05 的
-     * 目标方法在全 dex 无调用点（钩子永不命中），AD-03 的数据层钩子拦不住
-     * ShakeButton 传感器触发链。一律 blocked：保留编号与行位、不注册安装器、
-     * 默认关、UI 置灰并显示原因——不再假装有覆盖。
+     * 17.02.0.2010 两个挂载点不可用（复核发现 #85/#93）：AD-05 的目标方法在全 dex
+     * 无调用点（钩子永不命中），AD-03 的数据层钩子拦不住 ShakeButton 传感器触发链。
+     * 一律 blocked：保留编号与行位、不注册安装器、默认关、UI 置灰并显示原因——
+     * 不再假装有覆盖。PV-03 已于 0.8.4 重定位（Lec0#dispatch 推广分支门控），
+     * 不再 blocked。
      */
     @Test
     public void deadMountPointsAreBlockedOn1702() {
@@ -146,8 +147,6 @@ public class FeatureTest {
                 Feature.SPLASH_SHAKE.blockedReason);
         assertEquals("17.02 AfcTkManager#registerTkFlag 无调用点，钩子永不命中",
                 Feature.BG_AFC_TAOKE.blockedReason);
-        assertEquals("17.02 DeviceInfo#installApk 无调用点，真实安装链（Laa0.a）未覆盖",
-                Feature.H5_INSTALL_APK.blockedReason);
 
         int blocked = 0;
         for (Feature f : Feature.values()) {
@@ -155,7 +154,22 @@ public class FeatureTest {
                 blocked++;
             }
         }
-        assertEquals("blocked 集合必须恰好是上述三个死挂载点", 3, blocked);
+        assertEquals("blocked 集合必须恰好是上述两个死挂载点", 2, blocked);
+    }
+
+    /**
+     * PV-03 重定位（0.8.4）：旧挂载点 DeviceInfo#installApk 死代码，新挂载点
+     * Lec0#dispatch 推广分支门控（dexsql 实测官方分支独立）。恢复可用：
+     * 不 blocked，但 PV 组默认关（用户显式开启才落钩）。
+     */
+    @Test
+    public void h5InstallApkIsAvailableAndDefaultsOff() {
+        Feature f = Feature.H5_INSTALL_APK;
+        assertFalse("PV-03 已重定位，不应再标记 blocked", f.blocked());
+        assertFalse("非 blocked 项不得保留 blocked 原因", f.blockedReason != null);
+        assertFalse("PV 组功能默认关闭", f.defaultEnabled);
+        assertEquals("PV-03", f.id);
+        assertEquals("h5_install_apk", f.key);
     }
 
     private static java.util.List<String> keysInEnumOrder() {

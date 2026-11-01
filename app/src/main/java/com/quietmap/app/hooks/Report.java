@@ -7,6 +7,8 @@ import android.util.Log;
 
 import com.quietmap.app.Feature;
 import com.quietmap.app.HookState;
+import com.quietmap.app.QuietMapModule;
+import com.quietmap.app.ReportProtocol;
 import com.quietmap.app.ReportSocketProtocol;
 import com.quietmap.app.StatusProvider;
 
@@ -295,6 +297,8 @@ final class Report {
      * reg/skip/crit 对每个 touched Feature 都必须发送，缺失时发空串：StatusProvider
      * 用最新值覆盖旧值，只有空串才能清掉上一次目标进程会话遗留的 skip/crit。
      * hit/entry 仍只在 >0 时发送，由 StatusProvider 取历史最大值，不会被空值覆盖。
+     * crash0/1/2（0 最新，来自 QuietMapModule 的进程内崩溃环）始终发送、无崩溃发
+     * 空串：与 reg/skip 同一清残留机制，单条已在记录时截断到 240（≤ MAX_VALUE）。
      */
     static Map<String, String> snapshot() {
         Map<String, String> out = new TreeMap<>();
@@ -314,6 +318,9 @@ final class Report {
             out.put(StatusProvider.PREFIX_CRIT + f.key,
                     HookState.hasCriticalSkip(f) ? "1" : "");
         }
+        out.put(ReportProtocol.KEY_CRASH_0, QuietMapModule.crashAt(0));
+        out.put(ReportProtocol.KEY_CRASH_1, QuietMapModule.crashAt(1));
+        out.put(ReportProtocol.KEY_CRASH_2, QuietMapModule.crashAt(2));
         return out;
     }
 

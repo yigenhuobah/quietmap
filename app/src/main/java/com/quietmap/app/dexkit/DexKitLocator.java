@@ -32,8 +32,14 @@ public final class DexKitLocator {
     private static final Map<ClassLoader, DexKitBridge> sBridgeCache = new WeakHashMap<>();
     /** 扫描失败负缓存：key 含查询身份与 anchor 集合，按 ClassLoader 隔离。 */
     private static final Map<ClassLoader, Map<String, Boolean>> sMissCache = new WeakHashMap<>();
-    /** native 加载/初始化整体失败后置位：getBridge 直接短路，不再重复 load/create。 */
-    private static volatile boolean sNativeInitFailed;
+    /**
+     * native 加载/初始化最近一次失败的时间戳（elapsedRealtime，0=未失败）。
+     * 不再永久短路：60 秒重试窗口内仍短路，过窗放行重试并刷新时间戳——
+     * 一次瞬时失败（如启动早期低内存 dlopen 失败）不应在进程内永久禁用 DexKit。
+     */
+    private static volatile long sNativeInitFailedAtMs;
+    /** native 初始化失败后的重试窗口时长（毫秒）。包内可见供单测。 */
+    static final long NATIVE_INIT_RETRY_WINDOW_MS = 60_000L;
     private static volatile String sModuleNativeDir = null;
     /** 非主进程（:locationservice/:widgetProvider）关闭 DexKit，避免 native 全 dex 扫描开销。 */
     private static volatile boolean sEnabled = true;
@@ -54,14 +60,25 @@ public final class DexKitLocator {
         sEnabled = enabled;
     }
 
+    /**
+     * native 初始化失败重试窗口判定：窗口内仍短路，过窗（含恰好到窗）放行重试。
+     * failedAtMs=0 表示从未失败，永不短路。时间由调用方传入（生产端用
+     * SystemClock.elapsedRealtime 单调时钟），保持纯 JVM 可测。包内可见供单测。
+     */
+    static boolean shouldShortCircuitNativeInit(long failedAtMs, long nowMs) {
+        return failedAtMs != 0 && nowMs - failedAtMs < NATIVE_INIT_RETRY_WINDOW_MS;
+    }
+
     public static synchronized DexKitBridge getBridge(ClassLoader cl) {
         if (cl == null) {
             return null;
         }
         DexKitBridge bridge = sBridgeCache.get(cl);
         if (bridge == null) {
-            if (sNativeInitFailed) {
-                // native 加载/初始化已整体失败：负缓存短路，避免每次兜底查询重复 load/create。
+            if (shouldShortCircuitNativeInit(sNativeInitFailedAtMs,
+                    android.os.SystemClock.elapsedRealtime())) {
+                // native 上次初始化失败且仍在 60 秒重试窗口内：短路，
+                // 避免每次兜底查询重复 load/create；过窗后放行重试。
                 return null;
             }
             try {
@@ -88,8 +105,10 @@ public final class DexKitLocator {
                 sBridgeCache.put(cl, bridge);
                 Log.i(TAG, "DexKitBridge initialized for ClassLoader: " + cl);
             } catch (Throwable t) {
-                // 初始化失败在本进程内不会自愈（so 与宿主 ClassLoader 都不会变），置位负缓存。
-                sNativeInitFailed = true;
+                // 记录失败时间戳：窗口内仍短路，过窗放行重试并刷新时间戳
+                // （getBridge 已 synchronized，重试成本可控）。so 与宿主 ClassLoader
+                // 确实不变时重试依旧失败，只多付一次窗口间隔的 load/create 开销。
+                sNativeInitFailedAtMs = android.os.SystemClock.elapsedRealtime();
                 Log.w(TAG, "DexKitBridge initialization failed: " + t.getMessage());
             }
         }

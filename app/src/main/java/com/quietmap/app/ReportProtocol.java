@@ -30,6 +30,11 @@ public final class ReportProtocol {
      */
     public static final String PREFIX_CRIT = "crit.";
 
+    /** 最近崩溃回传键（crash0 最新，crash2 最旧）：键值通道的固定键名。 */
+    public static final String KEY_CRASH_0 = "crash0";
+    public static final String KEY_CRASH_1 = "crash1";
+    public static final String KEY_CRASH_2 = "crash2";
+
     /** 超过 10 分钟没有新回传就视为过期，失败计数按“未知”处理（0）。 */
     public static final long DEFAULT_TTL_MS = 10 * 60 * 1000L;
 
@@ -104,7 +109,7 @@ public final class ReportProtocol {
     public static final int MAX_KEY = 128;
     public static final int MAX_VALUE = 256;
 
-    /** 22 个 Feature × 5 个前缀（reg/hit/entry/skip/crit）= 110 个合法键。 */
+    /** 22 个 Feature × 5 个前缀（reg/hit/entry/skip/crit）+ 3 个 crash 键 = 113 个合法键。 */
     private static final Set<String> ALLOWED_KEYS = buildAllowedKeys();
 
     private ReportProtocol() {
@@ -119,6 +124,9 @@ public final class ReportProtocol {
             keys.add(PREFIX_SKIP + f.key);
             keys.add(PREFIX_CRIT + f.key);
         }
+        keys.add(KEY_CRASH_0);
+        keys.add(KEY_CRASH_1);
+        keys.add(KEY_CRASH_2);
         return Collections.unmodifiableSet(keys);
     }
 

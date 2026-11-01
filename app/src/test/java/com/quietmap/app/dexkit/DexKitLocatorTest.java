@@ -1,18 +1,22 @@
 package com.quietmap.app.dexkit;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
 /**
- * DexKitLocator 的纯 JVM 逻辑：扫描失败负缓存的 key 组成（S4）。
+ * DexKitLocator 的纯 JVM 逻辑：扫描失败负缓存的 key 组成（S4）、
+ * native 初始化失败的 60 秒重试窗口判定。
  * key 必须区分"类/方法/返回/参数/anchor 集合"任一维度的差异——同一 anchor
  * 集合可能被不同目标 hint 复用，key 不含查询身份就会让 A 的负缓存误杀 B。
  * findMethod/selectMatchingMethod 依赖 android.util.Log 与 dexkit native 桥
  * （JVM 单测里 Log 桩抛 Stub!、native 桥不可用），故扫描/歧义拒绝路径本身
- * 不在 JVM 单测覆盖范围内，只覆盖无副作用的 key 构造。
+ * 不在 JVM 单测覆盖范围内，只覆盖无副作用的 key 构造与窗口判定
+ * （时间由调用方传入，见 {@link DexKitLocator#shouldShortCircuitNativeInit}）。
  */
 public class DexKitLocatorTest {
 
@@ -77,5 +81,29 @@ public class DexKitLocatorTest {
         assertEquals(
                 DexKitLocator.missCacheKey(null, "run", void.class, null, "x"),
                 DexKitLocator.missCacheKey("", "run", void.class, new Class<?>[0], "x"));
+    }
+
+    @Test
+    public void nativeInitRetryWindowShortCircuitsOnlyWithin60sWindow() {
+        assertEquals("重试窗口规格写死 60 秒", 60_000L,
+                DexKitLocator.NATIVE_INIT_RETRY_WINDOW_MS);
+
+        final long failedAt = 1_000_000L;
+        assertTrue("窗口内（<60s）必须短路，避免每次兜底查询重复 load/create",
+                DexKitLocator.shouldShortCircuitNativeInit(failedAt, failedAt + 59_999L));
+        assertTrue("失败瞬间也在窗口内",
+                DexKitLocator.shouldShortCircuitNativeInit(failedAt, failedAt));
+        assertFalse("恰好到窗（60s）应放行重试",
+                DexKitLocator.shouldShortCircuitNativeInit(failedAt, failedAt + 60_000L));
+        assertFalse("过窗后必须放行重试（瞬时失败可自愈）",
+                DexKitLocator.shouldShortCircuitNativeInit(failedAt, failedAt + 60_001L));
+    }
+
+    @Test
+    public void nativeInitRetryWindowNeverShortCircuitsBeforeAnyFailure() {
+        // 0 = 从未失败：不得短路，否则首次 getBridge 永远拿不到 bridge。
+        assertFalse("从未失败（0 时间戳）不得短路",
+                DexKitLocator.shouldShortCircuitNativeInit(0L, 0L));
+        assertFalse(DexKitLocator.shouldShortCircuitNativeInit(0L, 123_456_789L));
     }
 }

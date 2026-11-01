@@ -2,11 +2,15 @@ package com.quietmap.app.hooks;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import com.quietmap.app.Feature;
 import com.quietmap.app.HookState;
+import com.quietmap.app.QuietMapModule;
 import com.quietmap.app.ReportProtocol;
 
 import org.junit.Test;
@@ -162,6 +166,119 @@ public class ReportTest {
             sb.append(c);
         }
         return sb.toString();
+    }
+
+    // ---------------------------------------------------------------- 崩溃回传
+
+    /** crash0/1/2 必须始终出现在快照里：无崩溃时为空串（覆盖清掉旧会话残留）。 */
+    @Test
+    public void snapshotAlwaysCarriesThreeCrashKeys() {
+        Map<String, String> snap = Report.snapshot();
+
+        assertTrue("crash0 必须回传", snap.containsKey(ReportProtocol.KEY_CRASH_0));
+        assertTrue("crash1 必须回传", snap.containsKey(ReportProtocol.KEY_CRASH_1));
+        assertTrue("crash2 必须回传", snap.containsKey(ReportProtocol.KEY_CRASH_2));
+        for (int i = 0; i < 3; i++) {
+            String value = snap.get("crash" + i);
+            assertNotNull(value);
+            assertTrue("crash 值必须通过回传长度校验", ReportProtocol.isValidValue(value));
+        }
+    }
+
+    /** 崩溃环：最新在前、最多 3 条，新的顶掉最旧的。 */
+    @Test
+    public void crashRingKeepsLatestThreeNewestFirst() {
+        QuietMapModule.recordCrash(new Thread("qm-crash-t1"), new RuntimeException("one"));
+        QuietMapModule.recordCrash(new Thread("qm-crash-t2"), new RuntimeException("two"));
+        QuietMapModule.recordCrash(new Thread("qm-crash-t3"), new RuntimeException("three"));
+        QuietMapModule.recordCrash(new Thread("qm-crash-t4"), new RuntimeException("four"));
+
+        Map<String, String> snap = Report.snapshot();
+
+        assertTrue("crash0 是最新一条",
+                snap.get(ReportProtocol.KEY_CRASH_0).contains("|qm-crash-t4|"));
+        assertTrue(snap.get(ReportProtocol.KEY_CRASH_1).contains("|qm-crash-t3|"));
+        assertTrue("第 4 条新崩溃顶掉了第 1 条",
+                !snap.get(ReportProtocol.KEY_CRASH_2).contains("|qm-crash-t1|"));
+        assertTrue(snap.get(ReportProtocol.KEY_CRASH_2).contains("|qm-crash-t2|"));
+    }
+
+    /** 崩溃记录格式：时间（epoch 毫秒）|线程名|异常类名|栈前 2 帧。 */
+    @Test
+    public void crashEntryFormatCarriesTimeThreadClassAndTwoFrames() {
+        RuntimeException boom = new RuntimeException("format");
+        QuietMapModule.recordCrash(new Thread("qm-crash-fmt"), boom);
+
+        String crash0 = Report.snapshot().get(ReportProtocol.KEY_CRASH_0);
+        String[] parts = crash0.split("\\|", -1);
+
+        assertEquals("时间|线程|异常类名|帧1|帧2 共 5 段", 5, parts.length);
+        long ts = Long.parseLong(parts[0]);
+        assertTrue("首段必须是当前毫秒时间",
+                Math.abs(System.currentTimeMillis() - ts) < 60_000L);
+        assertEquals("qm-crash-fmt", parts[1]);
+        assertEquals("java.lang.RuntimeException", parts[2]);
+        assertEquals("帧 1 必须来自 getStackTrace()[0]",
+                boom.getStackTrace()[0].toString(), parts[3]);
+        // 帧 2 可能因 240 截断只保留前缀（新 JDK 的反射栈帧较长时会触发截断）。
+        assertTrue("帧 2 必须是 getStackTrace()[1] 的前缀",
+                boom.getStackTrace()[1].toString().startsWith(parts[4]));
+    }
+
+    /** 单条截断 ≤240（MAX_VALUE=256 之内）：超长线程名只保留前 240 个字符。 */
+    @Test
+    public void crashEntryTruncatedTo240Chars() {
+        QuietMapModule.recordCrash(new Thread("x".repeat(300)), new RuntimeException("trunc"));
+
+        String crash0 = Report.snapshot().get(ReportProtocol.KEY_CRASH_0);
+
+        assertEquals("单条崩溃必须截断到 240 字符", 240, crash0.length());
+        assertTrue("截断结果必须通过回传值长度校验", ReportProtocol.isValidValue(crash0));
+    }
+
+    /** 防御：null 线程 / null 异常不得抛出（UEH 内任何异常都会破坏原有处理链）。 */
+    @Test
+    public void recordCrashToleratesNullThreadAndThrowable() {
+        QuietMapModule.recordCrash(null, null);
+
+        String crash0 = Report.snapshot().get(ReportProtocol.KEY_CRASH_0);
+        assertNotNull("null 输入也要落一条占位记录", crash0);
+        assertTrue("线程名/异常类名缺失时以 ? 占位", crash0.endsWith("|?"));
+    }
+
+    /**
+     * UEH 包装（QuietMapModule.installCrashHandler，onPackageReady 主进程分支调用）：
+     * 幂等（静态 boolean 只包一次）、先记录崩溃再透传 previous；previous 的异常
+     * 处理行为不被改变（透传后原样交回）。
+     */
+    @Test
+    public void crashHandlerWrapsPreviousOnceAndForwards() {
+        Thread.UncaughtExceptionHandler original = Thread.getDefaultUncaughtExceptionHandler();
+        try {
+            List<Throwable> forwarded = new ArrayList<>();
+            Thread.UncaughtExceptionHandler previous = (t, e) -> forwarded.add(e);
+            Thread.setDefaultUncaughtExceptionHandler(previous);
+
+            QuietMapModule.installCrashHandler();
+            Thread.UncaughtExceptionHandler wrapped = Thread.getDefaultUncaughtExceptionHandler();
+            assertNotNull("必须替换默认 UEH", wrapped);
+            assertNotSame("默认 UEH 必须被包装", previous, wrapped);
+
+            QuietMapModule.installCrashHandler();
+            assertSame("静态 boolean 必须保证只包一次", wrapped,
+                    Thread.getDefaultUncaughtExceptionHandler());
+
+            RuntimeException boom = new RuntimeException("wrapped");
+            wrapped.uncaughtException(Thread.currentThread(), boom);
+
+            assertEquals("previous 必须被透传", 1, forwarded.size());
+            assertSame("透传的必须是原始异常", boom, forwarded.get(0));
+            assertTrue("崩溃必须先落进快照",
+                    Report.snapshot().get(ReportProtocol.KEY_CRASH_0)
+                            .contains("java.lang.RuntimeException"));
+        } finally {
+            Thread.setDefaultUncaughtExceptionHandler(original);
+        }
     }
 
     // ---------------------------------------------------------------- 通道顺序

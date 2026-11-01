@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.format.DateFormat;
 import android.widget.Toast;
@@ -172,6 +174,8 @@ public class DiagnosticsFragment extends PreferenceFragmentCompat {
             screen.addPreference(empty);
         }
 
+        addCrashSection(screen, state);
+
         Preference refresh = new Preference(requireContext());
         refresh.setTitle(R.string.diag_refresh);
         refresh.setSummary(R.string.diag_refresh_summary);
@@ -190,6 +194,145 @@ public class DiagnosticsFragment extends PreferenceFragmentCompat {
             return true;
         });
         screen.addPreference(copy);
+
+        // 导出诊断包：strings.xml 不在本次修复的文件清单内，文案用字面量（与 QB 对齐）。
+        Preference export = new Preference(requireContext());
+        export.setTitle("导出诊断包");
+        export.setSummary("系统分享诊断文本：版本/系统/框架 API/目标版本/功能状态/最近命中/最近崩溃");
+        export.setOnPreferenceClickListener(p -> {
+            exportDiagnostics();
+            return true;
+        });
+        screen.addPreference(export);
+    }
+
+    /** 最近崩溃区（crash0 最新）：无崩溃时不显示。 */
+    private void addCrashSection(PreferenceScreen screen, ReportState state) {
+        PreferenceCategory category = null;
+        for (int i = 0; i < 3; i++) {
+            String crash = state.value("", crashKey(i));
+            if (crash == null || crash.isEmpty()) {
+                continue;
+            }
+            if (category == null) {
+                category = new PreferenceCategory(requireContext());
+                category.setTitle("最近崩溃");
+                screen.addPreference(category);
+            }
+            category.addPreference(crashRow(crash));
+        }
+    }
+
+    /** 崩溃行：标题为格式化时间，摘要为线程/异常/栈帧明细（首段解析失败则整行原文）。 */
+    private Preference crashRow(String crash) {
+        Preference p = new Preference(requireContext());
+        String title = crash;
+        String detail = crash;
+        int sep = crash.indexOf('|');
+        if (sep > 0) {
+            try {
+                long ms = Long.parseLong(crash.substring(0, sep));
+                title = DateFormat.getTimeFormat(requireContext()).format(new Date(ms));
+                detail = crash.substring(sep + 1);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        p.setTitle(title);
+        p.setSummary(detail);
+        p.setSelectable(false);
+        return p;
+    }
+
+    /** 最近崩溃文本（crashN 原文逐行）；无崩溃返回空串。 */
+    private String crashText(ReportState state) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 3; i++) {
+            String crash = state.value("", crashKey(i));
+            if (crash != null && !crash.isEmpty()) {
+                sb.append("crash").append(i).append(' ').append(crash).append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String crashKey(int index) {
+        return index == 0 ? ReportProtocol.KEY_CRASH_0
+                : index == 1 ? ReportProtocol.KEY_CRASH_1 : ReportProtocol.KEY_CRASH_2;
+    }
+
+    /**
+     * 导出诊断包：聚合模块版本/系统版本/框架 API/目标版本/各功能状态/最近命中/
+     * 最近崩溃为一段文本，ACTION_SEND text/plain 系统分享——不写文件、不依赖
+     * FileProvider。分享面板拉不起来只弹 Toast，不阻塞诊断页。
+     */
+    private void exportDiagnostics() {
+        try {
+            Intent send = new Intent(Intent.ACTION_SEND);
+            send.setType("text/plain");
+            send.putExtra(Intent.EXTRA_TEXT, buildExportText());
+            startActivity(Intent.createChooser(send, "导出诊断包"));
+        } catch (Throwable ignored) {
+            Toast.makeText(requireContext(), "诊断包导出失败", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private String buildExportText() {
+        // 使用当前页面已经渲染的状态，不在主线程重新读文件。
+        ReportState state = mState != null ? mState : ReportState.none();
+        StringBuilder sb = new StringBuilder();
+        sb.append(getString(R.string.app_name)).append(' ').append(versionName()).append('\n');
+        sb.append("系统: Android ").append(Build.VERSION.RELEASE)
+                .append(" (API ").append(Build.VERSION.SDK_INT).append(")\n");
+        sb.append("框架 API: ").append(frameworkApi()).append('\n');
+        sb.append("目标版本: ").append(targetVersion()).append('\n');
+        sb.append(getString(R.string.diag_header, refreshTime())).append('\n');
+
+        sb.append("\n[功能状态]\n");
+        for (Feature f : Feature.values()) {
+            sb.append(f.id).append(' ').append(getString(f.titleRes))
+                    .append(": ").append(summary(f, state)).append('\n');
+        }
+
+        sb.append("\n[最近命中]\n");
+        boolean anyHit = false;
+        for (Feature f : Feature.values()) {
+            long hit = state.hit(f.key);
+            if (hit > 0) {
+                sb.append(f.id).append(' ').append(getString(f.titleRes))
+                        .append(": hit ").append(hit).append('\n');
+                anyHit = true;
+            }
+        }
+        if (!anyHit) {
+            sb.append(getString(R.string.diag_no_data)).append('\n');
+        }
+
+        sb.append("\n[最近崩溃]\n");
+        String crashes = crashText(state);
+        sb.append(crashes.isEmpty() ? getString(R.string.diag_no_data) + '\n' : crashes);
+        return sb.toString();
+    }
+
+    /** Xposed 框架 API 版本（模块 App 进程经 XposedService 绑定得知）；未绑定返回提示。 */
+    private String frameworkApi() {
+        try {
+            io.github.libxposed.service.XposedService service = ServiceBridge.get();
+            return service != null ? String.valueOf(service.getApiVersion()) : "未绑定";
+        } catch (Throwable t) {
+            return "?";
+        }
+    }
+
+    /** 目标应用（高德）版本；未安装或查询失败返回提示。 */
+    private String targetVersion() {
+        try {
+            android.content.pm.PackageInfo info = requireContext().getPackageManager()
+                    .getPackageInfo(ReportPaths.TARGET_PACKAGE, 0);
+            String version = info.versionName != null ? info.versionName : "?";
+            return version + " (" + info.versionCode + ")";
+        } catch (Throwable t) {
+            return "未安装";
+        }
     }
 
     private Preference row(Feature f, ReportState state) {
@@ -303,6 +446,10 @@ public class DiagnosticsFragment extends PreferenceFragmentCompat {
         for (Feature f : Feature.values()) {
             sb.append(f.id).append(' ').append(getString(f.titleRes))
                     .append(": ").append(summary(f, state)).append('\n');
+        }
+        String crashes = crashText(state);
+        if (!crashes.isEmpty()) {
+            sb.append("最近崩溃:\n").append(crashes);
         }
         try {
             ClipboardManager cm = (ClipboardManager) requireContext()
