@@ -6,3 +6,6 @@ contact_links:
   - name: 兼容版本说明
     url: https://github.com/yigenhuobah/quietmap#兼容性
     about: 确认高德地图版本在适配范围内，以及已知限制
+  - name: 参与开发 / 提交代码
+    url: https://github.com/yigenhuobah/quietmap/blob/main/CONTRIBUTING.md
+    about: 只接受源码 PR；构建、测试、代码约定与 Feature 编号规则见这里
