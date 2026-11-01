@@ -104,12 +104,18 @@ VERSION_CODE="$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]+([0-9]+).*/\1/p' 
 log "版本 $VERSION（versionCode $VERSION_CODE）"
 
 # ---------- 预检 ----------
-if [ "$ALLOW_DIRTY" -eq 0 ]; then
+# dry-run 只打印计划、不做任何改动，工作区脏不阻塞预览（刚改完还没提交的发布脚本本身就会让树变脏）。
+if [ "$ALLOW_DIRTY" -eq 1 ]; then
+    warn "--allow-dirty：跳过工作区清洁检查"
+elif [ "$DRY_RUN" -eq 1 ]; then
+    if [ -n "$(git status --porcelain)" ]; then
+        warn "工作区不干净（dry-run 仅预览，不阻塞；正式发布前需提交或加 --allow-dirty）："
+        git status --porcelain | sed 's/^/release: warning:   /' >&2
+    fi
+else
     DIRTY="$(git status --porcelain)"
     [ -z "$DIRTY" ] || die "工作区不干净（用 --allow-dirty 跳过）：
 $DIRTY"
-else
-    warn "--allow-dirty：跳过工作区清洁检查"
 fi
 
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
@@ -250,23 +256,41 @@ sync_official_repo() {
         return
     fi
     local official_tag="${VERSION_CODE}-${VERSION}"
-    local work_dir dl_dir apk_name local_sha remote_sha attempt
+    local work_dir dl_dir apk_name local_sha remote_sha
+    local -a tracked_apks=()
 
     if [ "$DRY_RUN" -eq 1 ]; then
         printf '[dry-run] clone %s 到临时目录\n' "$OFFICIAL_REPO"
+        printf '[dry-run] git rm 官方仓已跟踪的旧 APK（如有）\n'
         printf '[dry-run] cp README.md + %s 到官方仓\n' "$(basename "$APK")"
         printf '[dry-run] git add / commit / tag %s\n' "$official_tag"
-        [ "$NO_PUSH" -eq 1 ] || printf '[dry-run] git push 分支与 tag %s\n' "$official_tag"
-        [ "$NO_PUSH" -eq 1 ] || printf '[dry-run] gh release download %s 并比对 APK SHA-256\n' "$official_tag"
+        if [ "$NO_PUSH" -eq 0 ]; then
+            printf '[dry-run] git push 分支与 tag %s\n' "$official_tag"
+            printf '[dry-run] gh release view %s --repo %s（已存在则跳过创建）\n' \
+                "$official_tag" "$OFFICIAL_REPO"
+            printf '[dry-run] gh release create %s --repo %s --title %s --notes-file %s/release-notes.md %s %s/mapping.txt %s/SHA256SUMS %s/release-notes.md\n' \
+                "$official_tag" "$OFFICIAL_REPO" "$VERSION" "$ARTIFACT_DIR" \
+                "$(basename "$APK")" "$ARTIFACT_DIR" "$ARTIFACT_DIR" "$ARTIFACT_DIR"
+            printf '[dry-run] gh release download %s 并比对 APK SHA-256\n' "$official_tag"
+        fi
         return
     fi
 
+    # 官方仓（Xposed-Modules-Repo）没有 CI 生成 Release 资产，需要在这里主动创建，
+    # 因此 gh 是必需依赖：缺失直接退出，不再降级跳过校验。
+    command -v gh >/dev/null 2>&1 || \
+        die "未找到 gh（创建/校验官方仓 Release 必需）。安装：winget install GitHub.cli 或 https://cli.github.com/"
+
     work_dir="$(mktemp -d)"
     CLEANUP_DIRS+=("$work_dir")
-    if command -v gh >/dev/null 2>&1; then
-        run gh repo clone "$OFFICIAL_REPO" "$work_dir"
-    else
-        run git clone "https://github.com/${OFFICIAL_REPO}.git" "$work_dir"
+    run gh repo clone "$OFFICIAL_REPO" "$work_dir"
+
+    # 防御性清理：官方仓若还跟踪着旧版 APK（如 quietmap-0.8.4.apk），先 git rm 再提交新资产，
+    # 避免仓里同时躺着多个版本的 APK。只删 APK 文件，SUMMARY/README 等一律不动。
+    mapfile -t tracked_apks < <(git -C "$work_dir" ls-files -- '*.apk')
+    if [ "${#tracked_apks[@]}" -gt 0 ]; then
+        log "官方仓移除旧 APK：${tracked_apks[*]}"
+        git -C "$work_dir" rm -q -- "${tracked_apks[@]}"
     fi
 
     [ -f "$work_dir/SUMMARY" ] || warn "官方仓没有 SUMMARY（脚本不会创建/删除它）"
@@ -286,24 +310,30 @@ sync_official_repo() {
     log "官方仓 SUMMARY 保留未改动"
 
     if [ "$NO_PUSH" -eq 1 ]; then
-        log "--no-push：跳过官方仓 push 与资产比对（本地提交/标签已完成）"
+        log "--no-push：跳过官方仓 push、Release 创建与资产比对（本地提交/标签已完成）"
         return
     fi
 
     git -C "$work_dir" push origin HEAD
     git -C "$work_dir" push origin "$official_tag"
 
+    # ---------- 官方仓 Release：无 CI 自动生成，push 后主动创建（幂等） ----------
+    if gh release view "$official_tag" --repo "$OFFICIAL_REPO" >/dev/null 2>&1; then
+        log "官方仓 Release ${official_tag} 已存在，跳过创建"
+    else
+        log "创建官方仓 Release ${official_tag}（$OFFICIAL_REPO）"
+        run gh release create "$official_tag" \
+            --repo "$OFFICIAL_REPO" \
+            --title "$VERSION" \
+            --notes-file "$ARTIFACT_DIR/release-notes.md" \
+            "$APK" "$ARTIFACT_DIR/mapping.txt" "$ARTIFACT_DIR/SHA256SUMS" "$ARTIFACT_DIR/release-notes.md"
+    fi
+
+    # ---------- 下载官方仓资产，与本地 APK 比对 SHA-256 ----------
     dl_dir="$(mktemp -d)"
     CLEANUP_DIRS+=("$dl_dir")
-    for attempt in $(seq 1 12); do
-        if gh release download "$official_tag" --repo "$OFFICIAL_REPO" \
-                --pattern '*.apk' --dir "$dl_dir" --clobber 2>/dev/null; then
-            break
-        fi
-        [ "$attempt" -lt 12 ] || die "官方仓 Release 资产下载失败（tag ${official_tag}）"
-        log "等待官方仓 Release 资产生成（${attempt}/12）…"
-        sleep 10
-    done
+    gh release download "$official_tag" --repo "$OFFICIAL_REPO" \
+        --pattern '*.apk' --dir "$dl_dir" --clobber
     local_sha="$(sha256sum "$APK" | awk '{print $1}')"
     remote_sha="$(sha256sum "$dl_dir"/*.apk | awk '{print $1}' | head -1)"
     if [ "$local_sha" = "$remote_sha" ]; then
