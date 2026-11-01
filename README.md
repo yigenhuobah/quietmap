@@ -2,7 +2,7 @@
 
 让高德地图安静下来的 LSPosed 模块：后台净化、数据层断源、收敛弹窗与统计上报。
 
-> 当前版本 **0.8.3**（2026-10-31，versionCode 12）。
+> 当前版本 **0.8.5**（2026-11-01，versionCode 14）。
 > 目标应用：**高德地图 17.02.0.2010**（`com.autonavi.minimap`）。
 > 与高德地图官方无任何关联，仅供学习、研究和个人设备使用。
 
@@ -21,7 +21,7 @@
 
 ## 安装
 
-1. 安装 `quietmap-0.8.3.apk`。
+1. 安装 `quietmap-0.8.5.apk`。
 2. 在 LSPosed 管理器中启用「静途」，作用域勾选「高德地图」。
 3. 强制停止并重新打开高德地图。
 4. 打开模块 App，确认状态卡显示「已激活」。
@@ -209,7 +209,7 @@ bash tools/check-mounts.sh
 当前基线：单测 **222** 个用例通过（`:app:testDebugUnitTest`，0 失败 / 0 跳过）；`:app:lintDebug` 0 error；`tools/verify-apk.sh` PASS；`tools/check-mounts.sh` 对高德 17.02.0.2010 63/63 OK。
 
 工具链：AGP 8.13.2 + Gradle wrapper 8.13 + JDK 21（构建），Java source/target 17，compileSdk 37 / minSdk 29 / targetSdk 36。
-release 产物：`app/build/outputs/apk/release/quietmap-0.8.3.apk`（R8 minify + shrinkResources）。
+release 产物：`app/build/outputs/apk/release/quietmap-0.8.5.apk`（R8 minify + shrinkResources）。
 签名读取仓库根目录 `keystore.properties`；缺少该文件时 release 构建直接失败，不会产出用 debug 证书签名的包。
 
 ## GPL 红线

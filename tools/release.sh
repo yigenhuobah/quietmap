@@ -103,6 +103,11 @@ VERSION_CODE="$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]+([0-9]+).*/\1/p' 
 [ -n "$VERSION_CODE" ] || die "无法从 app/build.gradle 读取 versionCode"
 log "版本 $VERSION（versionCode $VERSION_CODE）"
 
+# README 首屏必须包含当前版本，防止「当前版本」长期漂移。
+if ! head -n 12 "$ROOT_DIR/README.md" | grep -qF "$VERSION"; then
+    die "README.md 首屏未包含当前版本 $VERSION：先同步「当前版本」再发布"
+fi
+
 # ---------- 预检 ----------
 # dry-run 只打印计划、不做任何改动，工作区脏不阻塞预览（刚改完还没提交的发布脚本本身就会让树变脏）。
 if [ "$ALLOW_DIRTY" -eq 1 ]; then

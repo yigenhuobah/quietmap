@@ -79,6 +79,15 @@ if [ -z "$SDK_SOURCE" ]; then
 fi
 info "android sdk: $SDK_SOURCE"
 
+# ------------------------------------------------- README 版本一致性
+# 「当前版本」长期不随 build.gradle 更新，README 与发布页会对不上；这里提前硬失败。
+VERSION_NAME="$(sed -nE "s/^[[:space:]]*versionName[[:space:]]+['\"]([^'\"]+)['\"].*/\1/p" app/build.gradle | head -n 1)"
+[ -n "$VERSION_NAME" ] || fail "cannot parse versionName from app/build.gradle"
+if ! head -n 12 README.md | grep -qF "$VERSION_NAME"; then
+    fail "README.md 首屏未包含当前 versionName ($VERSION_NAME)：请同步「当前版本」"
+fi
+info "readme version: $VERSION_NAME"
+
 # ---------------------------------------------------------------- tests + lint
 info "running ./gradlew :app:testDebugUnitTest :app:lintDebug"
 ./gradlew :app:testDebugUnitTest :app:lintDebug
