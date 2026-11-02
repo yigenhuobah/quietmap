@@ -107,7 +107,7 @@
 **仅保证高德地图 17.02.0.2010。** 其它版本尽力而为：大多数挂载点是非混淆业务类，升级后大概率仍在，但方法签名可能变化。升级高德后先跑挂载点体检：
 
 ```bash
-bash tools/check-mounts.sh "E:\path\to\amap.apk"
+bash tools/check-mounts.sh "/path/to/amap.apk"
 ```
 
 输出 `OK` / `SIG` / `GONE` 三态，共 **63 项**。DexSQL 缓存按 APK sha256 前 16 位隔离（`tools/.dexsql-cache/<sha256>/`），并在 `cache.meta` 记录路径/大小/mtime/sha256：换包、同路径替换或复用 `--cache-dir` 时指纹不符会自动重建，不会把旧包结果当成新包；查询失败（dexsql 非 0 退出或结果异常）会直接中止，不会把错误结果当成 0 行而误报 `GONE`。脚本会打印 APK 的 versionName，非 **17.02.0.2010** 时给出 WARN（只提示、不中断）。混淆挂载点（`Lah5#attemptRequestData`、`Ln8#run`、`Lry1#addToQueue`、`Lev1#IDeliveryDisplay.start`，17.01.0.2012 为 Lze5/La8/Lcx1/Llt1）随版本改名的风险最高，失效时模块只记 `skip`，不会影响其余钩子。

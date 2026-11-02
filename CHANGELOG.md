@@ -125,7 +125,7 @@ SHA-256: `0a08219406a81e1ea32bb512d08a79236c3b7ca7400cb0735c9a4243e403046f`
 - 单测 215 个用例通过（`:app:testDebugUnitTest`，0 失败 / 0 跳过 / 0 错误）。
 - `:app:lintDebug` 通过（22 条 warning、0 error）；`assembleRelease` 通过。
 - `tools/verify-apk.sh` PASS（17 个 `[ok]`、0 失败）：versionCode=11、versionName=0.8.2、签名证书 SHA-256 与 0.8.1 一致。
-- `tools/check-mounts.sh` 对高德 17.01.0.2012（`E:/download/base(4).apk`，aapt2 读出 versionName 17.01.0.2012）共 63 项：OK 63 / SIG 0 / GONE 0。
+- `tools/check-mounts.sh` 对高德 17.01.0.2012（aapt2 读出 versionName 17.01.0.2012）共 63 项：OK 63 / SIG 0 / GONE 0。
 - 本轮未做真机回归；UI-05 / AD-12 仍为“挂载点已注册、真实场景未验证”，HyperOS 上 socket 仍不可用（Provider 通道可用）。
 
 APK: `quietmap-0.8.2.apk`
