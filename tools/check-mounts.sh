@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 挂载点体检：高德升级后跑这个，30 秒内知道二十二个钩子的挂载点还活着几个。
+# 挂载点体检：高德升级后跑这个，30 秒内知道 22 项功能（20 可用 + 2 blocked）的挂载点还活着几个。
 #
 # 用法（Git Bash / Linux / macOS）：
 #   bash tools/check-mounts.sh [APK路径] [--apk APK] [--dexsql PATH] [--aapt2 PATH]
@@ -33,6 +33,8 @@
 # 完整签名取自 dexsql 对高德 17.02.0.2010 的实测（17.01.0.2012 → 17.02.0.2010
 # 重定位 12 条，混淆名旧→新：Lze5→Lah5、Llt1→Lev1、Ln55→Lp75、La8→Ln8、
 # Lcx1→Lry1、Le72→Lo82、Lso2→Lpp2、Lxf2→Lzg2）。
+# AD-03（splash_shake）与 AD-05（bg_afc_taoke）虽为 blocked、运行时不注册 hook，
+# 仍保留条目用于版本对比；这两项的 OK 只代表类/方法还在，不代表功能可用。
 # 混淆类挂载点（Lah5#attemptRequestData、Ln8#run、Lec0#dispatch）另有方法体
 # 字符串锚点监控：签名在但锚点串丢了也判 SIG（运行时 DexKit 按锚点定位会失败）。
 # Ln8 的锚点监控与运行时 Anchors.java 保持一致：两条字符串必须同时命中。
