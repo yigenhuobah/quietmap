@@ -6,6 +6,7 @@
 #
 # 选项：
 #   --local-only   只做本地构建/校验/归档，跳过全部发布动作
+#   --docs-only    只同步官方仓 README（跳过测试/构建/tag/Release）
 #   --dry-run      只打印将执行的命令，不构建、不改 git
 #   --skip-tests   跳过 :app:testDebugUnitTest
 #   --skip-lint    跳过 :app:lintDebug
@@ -24,6 +25,7 @@ CHANGELOG_FILE="$ROOT_DIR/CHANGELOG.md"
 OFFICIAL_REPO="Xposed-Modules-Repo/io.github.yigenhuobah.quietmap"
 
 LOCAL_ONLY=0
+DOCS_ONLY=0
 DRY_RUN=0
 SKIP_TESTS=0
 SKIP_LINT=0
@@ -50,7 +52,7 @@ die() {
 }
 
 usage() {
-    sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 cleanup() {
@@ -78,6 +80,7 @@ run() {
 while [ $# -gt 0 ]; do
     case "$1" in
         --local-only) LOCAL_ONLY=1 ;;
+        --docs-only) DOCS_ONLY=1 ;;
         --dry-run) DRY_RUN=1 ;;
         --skip-tests) SKIP_TESTS=1 ;;
         --skip-lint) SKIP_LINT=1 ;;
@@ -106,6 +109,44 @@ log "版本 $VERSION（versionCode $VERSION_CODE）"
 # README 首屏必须包含当前版本，防止「当前版本」长期漂移。
 if ! head -n 12 "$ROOT_DIR/README.md" | grep -qF "$VERSION"; then
     die "README.md 首屏未包含当前版本 $VERSION：先同步「当前版本」再发布"
+fi
+
+# ---------- 仅同步官方仓 README ----------
+# 放在正式预检之前：docs-only 不构建、不跑测试、不打 tag、不创建 Release，
+# 也不要求工作区干净（刚改完的 README 本身就可能未提交）；README 版本校验保留在上方。
+# 官方仓默认分支为 main，push origin HEAD 即推 main，不推 tag。
+if [ "$DOCS_ONLY" -eq 1 ]; then
+    log "--docs-only：只同步官方仓 README（跳过测试/构建/tag/Release）"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '[dry-run] clone %s 到临时目录\n' "$OFFICIAL_REPO"
+        printf '[dry-run] cp README.md 到官方仓\n'
+        printf '[dry-run] git add README.md（仅 README，不 add APK）\n'
+        printf '[dry-run] git commit -m "Docs: sync README for %s"（有变更时）\n' "$VERSION"
+        printf '[dry-run] git push origin HEAD（不推 tag）\n'
+        log "dry-run 完成（未改 git）"
+        exit 0
+    fi
+
+    command -v gh >/dev/null 2>&1 || \
+        die "未找到 gh（同步官方仓 README 必需）。安装：winget install GitHub.cli 或 https://cli.github.com/"
+
+    work_dir="$(mktemp -d)"
+    CLEANUP_DIRS+=("$work_dir")
+    run gh repo clone "$OFFICIAL_REPO" "$work_dir"
+    cp "$ROOT_DIR/README.md" "$work_dir/README.md"
+    git -C "$work_dir" add README.md
+    if git -C "$work_dir" diff --cached --quiet; then
+        log "官方仓 README 无变更"
+    else
+        git -C "$work_dir" commit -m "Docs: sync README for ${VERSION}"
+        if [ "$NO_PUSH" -eq 1 ]; then
+            log "--no-push：跳过官方仓 README push（本地提交已完成）"
+        else
+            git -C "$work_dir" push origin HEAD
+        fi
+    fi
+    log "完成（仅 README，未创建 tag/Release）"
+    exit 0
 fi
 
 # ---------- 预检 ----------

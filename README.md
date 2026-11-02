@@ -8,6 +8,8 @@
 
 **仓库**：<https://github.com/yigenhuobah/quietmap> ｜ **下载**：[Releases](https://github.com/yigenhuobah/quietmap/releases) ｜ **反馈**：[Issues](https://github.com/yigenhuobah/quietmap/issues/new/choose)
 
+更新日志见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 兼容性
 
 | 项 | 值 |
@@ -29,7 +31,7 @@
 
 ## 功能
 
-共 **22 项**功能：**可用 22 项，blocked 0 项**。默认值遵循：广告净化（AD）与界面精简（UI）开启，隐私保护（PV）关闭。每项功能均可单独关闭。
+共 **22 项**功能：**可用 20 项，blocked 2 项（AD-03、AD-05）**。blocked 项保留编号与行位，但不注册 hook、设置页置灰不渲染。默认值遵循：广告净化（AD）与界面精简（UI）开启，隐私保护（PV）关闭。每项可用功能均可单独关闭。
 
 ### 广告净化（AD，默认开）
 
@@ -37,9 +39,9 @@
 |---|---|---|
 | AD-01 | `splash_gate` | 开屏广告拦截（`canShowSplash` 返回 FALSE + 展示层兜底） |
 | AD-02 | `splash_request` | 开屏广告请求断源（`sendSplashScreen` 全重载 + 混淆调度类） |
-| AD-03 | `splash_shake` | 摇一摇开屏禁用（清空引导/提示，关闭速度严格判定） |
+| AD-03 | `splash_shake` | 摇一摇开屏禁用（清空引导/提示，关闭速度严格判定） **blocked**：摇一摇触发链在 `ShakeButton` 传感器层，数据层钩子拦不住 |
 | AD-04 | `bg_msg_fetch` | 后台营销消息拉取净化（亮屏触发、后台拉取、推送处理、主图拉取） |
-| AD-05 | `bg_afc_taoke` | 淘宝客广告 SDK 冷启动注册断源 |
+| AD-05 | `bg_afc_taoke` | 淘宝客广告 SDK 冷启动注册断源 **blocked**：`AfcTkManager#registerTkFlag` 无调用点，钩子永不命中 |
 | AD-06 | `home_banner` | 首页 Banner 拉取与加载断源 |
 | AD-07 | `home_operate_bar` | 首页运营活动条与地图消息气泡屏蔽 |
 | AD-08 | `h5_ad_log` | H5 广告点击/曝光监测断源 |
@@ -86,8 +88,8 @@
 
 - **状态卡**：正在连接框架… / 未激活 / 框架已连接 / 已激活，四态不新增第五态；副文案显示框架 API、目标版本与 remote prefs 可用性。
 - **异常横幅**：目标版本未适配，或已启用且明确失败的功能数 ≥2 时显示；目标应用未安装、只有 1 项失败、没有诊断数据时不显示。
-- **功能开关**：按 AD → UI → PV 分组；标题与摘要来自功能清单，值写入框架 remote prefs；22 项全部可切换。
-- **诊断页**：逐功能显示 `registered · entry N · hit N · skip 原因`（整体失效时追加 `critical`），无数据显示 `—`；`entry` 表示钩子入口被调用次数，用于区分“从未调用”和“调用了但未命中”；`critical` 表示该功能没有任何成功安装的挂载点，计入异常横幅，普通 `skip`（可选方法缺失）只展示不计失败；超过 10 分钟没有新回传的数据按“未知”处理。页首显示数据来源与刷新时间，页尾提供「刷新」「复制诊断信息」；进入页面与 `onResume` 刷新，不自动轮询。
+- **功能开关**：按 AD → UI → PV 分组；标题与摘要来自功能清单，值写入框架 remote prefs；20 项可切换（AD-03/AD-05 为 blocked，不渲染）。
+- **诊断页**：逐功能显示 `registered · entry N · hit N · skip 原因`（整体失效时追加 `critical`），无数据显示 `—`；`entry` 表示钩子入口被调用次数，用于区分“从未调用”和“调用了但未命中”；`critical` 表示该功能没有任何成功安装的挂载点，计入异常横幅，普通 `skip`（可选方法缺失）只展示不计失败；超过 10 分钟没有新回传的数据按“未知”处理。页首显示数据来源与刷新时间，页尾提供「刷新」「复制诊断信息」；0.8.5 起自动捕获宿主内崩溃并在诊断页展示最近 3 条，另提供「导出诊断包」经系统分享面板导出诊断文本；进入页面与 `onResume` 刷新，不自动轮询。
 - **关于页**：模块名、版本名/versionCode、目标应用与适配版本、源码、四模块互链、免责声明、许可证；末尾「桌面图标」分组的**隐藏桌面图标**开关只禁用承载 LAUNCHER 的 `activity-alias`，隐藏后仍可从 LSPosed 管理器打开本页关掉开关恢复。
 - **页脚**：重启生效与兼容版本提示。
 
@@ -147,7 +149,7 @@ bash tools/check-mounts.sh "E:\path\to\amap.apk"
 | 1.6 `AlimamaRequestHolder.sendSplashScreen` | 已覆盖 | 批2 `splash_request` | 两个重载全挂 |
 | 1.7 `nowHasSplashItemsFromAlimama` | 有意不做 | — | 请求/展示已双断，单独改缓存判断无额外收益 |
 | 1.8 倒计时/跳过按钮 | 有意不做 | — | 保留用户主动跳过，避免误伤 |
-| 1.9 `ShakeButton` + `SplashButtonInfo` | 已覆盖 | 批2 `splash_shake` | getter 返回空串/false |
+| 1.9 `ShakeButton` + `SplashButtonInfo` | blocked | 批2 `splash_shake` | 17.02 触发链在 `ShakeButton` 传感器层，数据层 getter 拦不住 |
 | 1.10 `g.clickAd` | 有意不做 | — | 会禁用正常广告点击行为 |
 | 1.11 `track.b.e/f` + `SplashLogManager` | 已覆盖 | 批5 `track_suppress` | 不调用 |
 | 2.1 `BannerRequestHolder.sendList` | 已覆盖 | 批3 `home_banner` | 2/3 参重载全挂 |
@@ -177,13 +179,13 @@ bash tools/check-mounts.sh "E:\path\to\amap.apk"
 | 5.4 开屏视频/扫光挂件 | 已覆盖（间接） | 批2 `splash_gate`/`splash_request` | 开屏不展示，挂件不出现 |
 | 5.5 `ImageTextMessageDownloader` 下载任务 | 已覆盖 | 批4 `msg_image_text` | 挂混淆 Runnable `La8` |
 | 6.1 `ze5` / `ye5` 预加载 | 部分覆盖 | 批2 `splash_request` | 只挂 `Lze5#attemptRequestData`；`ye5` 未单独挂载（其调用路径经 Lze5 间接收敛） |
-| 6.2 `AfcTkManager.registerTkFlag` | 已覆盖 | 批1 `bg_afc_taoke` | 不调用 |
+| 6.2 `AfcTkManager.registerTkFlag` | blocked | 批1 `bg_afc_taoke` | 17.02 无调用点，钩子永不命中 |
 | 6.3 `UtdidUploadTask` | 已覆盖 | 批1 `bg_utdid_upload` | upload/uploadFromCache/reqServer 全断 |
 | 6.4 utdid 生成/读取 | 有意不做 | — | 改返回值可能 NPE 或触发风控 |
 | 6.5 `UTAnalytics` 上报 | 已覆盖 | 批5 `track_suppress` | 实际总出口 `UTTracker.send/sendLog` |
 | 6.6 `track.b.e/f` + `SplashLogManager` | 已覆盖 | 批5 `track_suppress` | 不调用 |
 | 6.7 `BootBizDataPreloader` 其它预载 | 有意不做 | — | 只动 canShowSplash，保留首屏预载 |
-| 7.1a 开屏摇一摇 | 已覆盖 | 批2 `splash_shake` | getter 数据层 |
+| 7.1a 开屏摇一摇 | blocked | 批2 `splash_shake` | 17.02 触发链在传感器层，数据层 getter 拦不住 |
 | 7.1b `H5ShakePlugin` / `H5SensorPlugin` | 已覆盖 | 批5 `shake_h5` | 只拦 watchShake，保留 vibrate |
 | 7.1c `AMapAppStartShakePoint` / `SensorManagerHelper` | 已覆盖 | 批5 `shake_h5` | onInitialized + onSensorChanged 不调用 |
 | 7.2a `AwakenRequestHolder` | 已覆盖 | 批1 `bg_awaken_report` | 两个重载 |
@@ -206,7 +208,7 @@ JAVA_HOME="F:/Program Files/Java/jdk-21" ./gradlew test assembleDebug assembleRe
 bash tools/check-mounts.sh
 ```
 
-当前基线：单测 **222** 个用例通过（`:app:testDebugUnitTest`，0 失败 / 0 跳过）；`:app:lintDebug` 0 error；`tools/verify-apk.sh` PASS；`tools/check-mounts.sh` 对高德 17.02.0.2010 63/63 OK。
+当前基线：单测 **282** 个用例通过（`:app:testDebugUnitTest`，0 失败 / 0 跳过）；`:app:lintDebug` 0 error；`tools/verify-apk.sh` PASS；`tools/check-mounts.sh` 对高德 17.02.0.2010 63/63 OK。
 
 工具链：AGP 8.13.2 + Gradle wrapper 8.13 + JDK 21（构建），Java source/target 17，compileSdk 37 / minSdk 29 / targetSdk 36。
 release 产物：`app/build/outputs/apk/release/quietmap-0.8.5.apk`（R8 minify + shrinkResources）。

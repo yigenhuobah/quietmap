@@ -29,14 +29,14 @@ body:
     id: target-version
     attributes:
       label: 高德地图版本（可选）
-      placeholder: "17.01.0.2012"
+      placeholder: "17.02.0.2010"
     validations:
       required: false
   - type: input
     id: module-version
     attributes:
       label: 模块版本（可选）
-      placeholder: "0.8.2 (11)"
+      placeholder: "0.8.6 (15)"
     validations:
       required: false
   - type: textarea

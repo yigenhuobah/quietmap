@@ -10,7 +10,7 @@ body:
 
         1. 模块已在 LSPosed / Vector 里启用，作用域勾选了高德地图；
         2. 改过开关后**已重启高德地图**（多数功能重启生效）；
-        3. 已对照 README 的「兼容性」确认高德地图版本在适配范围内（当前为 17.01.0.2012）。
+        3. 已对照 README 的「兼容性」确认高德地图版本在适配范围内（当前为 17.02.0.2010）。
 
         没有版本信息的 issue 无法定位，下面的字段请尽量填全。
   - type: input
@@ -18,7 +18,7 @@ body:
     attributes:
       label: 模块版本
       description: 模块设置页「关于」可见版本名与 versionCode
-      placeholder: "0.8.2 (11)"
+      placeholder: "0.8.6 (15)"
     validations:
       required: true
   - type: input
@@ -26,7 +26,7 @@ body:
     attributes:
       label: 高德地图版本
       description: 系统设置 → 应用信息 → 版本号
-      placeholder: "17.01.0.2012"
+      placeholder: "17.02.0.2010"
     validations:
       required: true
   - type: input
