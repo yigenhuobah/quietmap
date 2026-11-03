@@ -47,10 +47,16 @@
 
 ## 适配新版本
 
-1. 用新版本 APK 重新定位锚点，跑 `tools/check-mounts.sh` 体检
-2. 静态体检 0 MISSING
+1. 用新版本 APK 重新定位锚点，跑 `tools/check-mounts.sh` 体检：
+   ```bash
+   bash tools/check-mounts.sh --apk /path/to/base.apk --dexsql /path/to/dexsql
+   # 或：DEXSQL=/path/to/dexsql bash tools/check-mounts.sh --apk /path/to/base.apk
+   ```
+2. 静态体检 0 GONE / 0 SIG，退出码必须为 0
 3. 真机验证核心功能，附诊断页导出
 4. 更新 README 兼容性表与 CHANGELOG
+
+发布前 `tools/release.sh` 默认要求 `--host-apk` + `--dexsql`（或 `DEXSQL`），缺失会硬失败；只有确认跳过时才用 `--skip-mounts`。
 
 ## 不接受
 

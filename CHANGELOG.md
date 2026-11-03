@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.7 - 2026-11-03
+
+### 修复
+
+- **诊断启动失败隔离**：`Report.start()` 包 try/catch，诊断线程/上下文异常不再中止整轮 hook 安装。
+- **DexKit 失败可见**：`DexKitLocator` 的失败路径统一 WARN + `HookState` 明细，覆盖 native 初始化、attempt1/attempt2 异常与最终 miss；attempt2 成功会撤销 attempt1 的失败记录。
+- **查询身份含完整签名**：`queryLabel` 包含参数/返回/anchor，避免同 class#method 不同签名的查询共享失败串、误清失败。
+- **check-mounts 门禁**：SIG/GONE 未显式放行时 exit 1，新增 `--allow-sig`/`--allow-gone`。
+
 ## 0.8.6 - 2026-11-02
 
 ### 修复

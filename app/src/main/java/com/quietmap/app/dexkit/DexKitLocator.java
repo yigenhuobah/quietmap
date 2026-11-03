@@ -2,6 +2,9 @@ package com.quietmap.app.dexkit;
 
 import android.util.Log;
 
+import com.quietmap.app.Feature;
+import com.quietmap.app.HookState;
+
 import org.luckypray.dexkit.DexKitBridge;
 import org.luckypray.dexkit.query.FindMethod;
 import org.luckypray.dexkit.query.enums.StringMatchType;
@@ -24,6 +27,8 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * 失败语义：任何一步失败都返回 null（调用方 fail-open skip），
  * 绝不向外抛——DexKit native 加载失败不得影响宿主进程。
+ * 失败同时打 WARN（带查询/类名）并写入 {@link HookState} 的 DexKit 明细，
+ * 避免「零挂载 + 只剩一句锚定失败」的诊断信息丢失。
  */
 public final class DexKitLocator {
 
@@ -70,15 +75,25 @@ public final class DexKitLocator {
     }
 
     public static synchronized DexKitBridge getBridge(ClassLoader cl) {
+        return getBridge(cl, null, "getBridge");
+    }
+
+    /**
+     * 带查询上下文的 bridge 获取：native 初始化失败时除 WARN 外写入
+     * {@link HookState}（feature 为 null 时只打日志，公共 {@link #getBridge(ClassLoader)}
+     * 路径没有功能归属）。仍保持 fail-open：任何异常都只返回 null。
+     */
+    private static synchronized DexKitBridge getBridge(ClassLoader cl, Feature feature, String query) {
         if (cl == null) {
             return null;
         }
         DexKitBridge bridge = sBridgeCache.get(cl);
         if (bridge == null) {
             if (shouldShortCircuitNativeInit(sNativeInitFailedAtMs,
-                    android.os.SystemClock.elapsedRealtime())) {
+                    elapsedRealtimeMs())) {
                 // native 上次初始化失败且仍在 60 秒重试窗口内：短路，
                 // 避免每次兜底查询重复 load/create；过窗后放行重试。
+                warnFailure(feature, query, "native init failed within retry window");
                 return null;
             }
             try {
@@ -91,28 +106,140 @@ public final class DexKitLocator {
                             loaded = true;
                         }
                     } catch (Throwable t) {
-                        Log.w(TAG, "DexKit load from moduleNativeDir failed: " + t.getMessage());
+                        Log.w(TAG, "DexKit load from moduleNativeDir failed: " + describe(t));
                     }
                 }
                 if (!loaded) {
                     try {
                         System.loadLibrary("dexkit");
                     } catch (Throwable t) {
-                        Log.w(TAG, "DexKit loadLibrary failed: " + t.getMessage());
+                        Log.w(TAG, "DexKit loadLibrary failed: " + describe(t));
                     }
                 }
                 bridge = DexKitBridge.create(cl, false);
+                if (bridge == null) {
+                    // create 返回 null 与抛异常同属初始化失败：同样进入重试窗口。
+                    sNativeInitFailedAtMs = elapsedRealtimeMs();
+                    warnFailure(feature, query, "bridge create returned null");
+                    return null;
+                }
                 sBridgeCache.put(cl, bridge);
                 Log.i(TAG, "DexKitBridge initialized for ClassLoader: " + cl);
             } catch (Throwable t) {
                 // 记录失败时间戳：窗口内仍短路，过窗放行重试并刷新时间戳
                 // （getBridge 已 synchronized，重试成本可控）。so 与宿主 ClassLoader
                 // 确实不变时重试依旧失败，只多付一次窗口间隔的 load/create 开销。
-                sNativeInitFailedAtMs = android.os.SystemClock.elapsedRealtime();
-                Log.w(TAG, "DexKitBridge initialization failed: " + t.getMessage());
+                sNativeInitFailedAtMs = elapsedRealtimeMs();
+                warnFailure(feature, query, "native init failed: " + describe(t));
             }
         }
         return bridge;
+    }
+
+    /**
+     * 失败收口：WARN 带查询身份，并写入 HookState 的 DexKit 明细。
+     * feature 为 null（无功能上下文）时只打日志。日志出口自身抛错也不能破坏
+     * fail-open（JVM 单测的 Log 桩正是这种情况）。包内可见供单测验证记账。
+     */
+    static void warnFailure(Feature feature, String query, String detail) {
+        String reason = failureReason(query, detail);
+        try {
+            Log.w(TAG, reason);
+        } catch (Throwable ignored) {
+            // 日志不可用不改变 fail-open 语义。
+        }
+        recordFailure(feature, query, detail);
+    }
+
+    /** 只记账不写日志：包内可见，供单测直接验证 HookState 明细。 */
+    static void recordFailure(Feature feature, String query, String detail) {
+        if (feature == null) {
+            return;
+        }
+        HookState.markDexKitFailure(feature, failureReason(query, detail));
+    }
+
+    /**
+     * 撤销一条已记录的 DexKit 失败：attempt1 抛异常、attempt2 成功兜底时调用。
+     *
+     * attempt1 的异常只是第一种查询方式失败，最终已由 attempt2 定位成功；
+     * 留在 HookState 会让诊断页继续展示假 skip。只删除完全匹配的明细，
+     * 同功能其他查询/native 初始化失败不受影响。包内可见供单测。
+     */
+    static void clearFailure(Feature feature, String query, String detail) {
+        if (feature == null || detail == null) {
+            return;
+        }
+        HookState.clearDexKitFailure(feature, failureReason(query, detail));
+    }
+
+    /** 失败明细的统一文本格式；记账与撤销必须用同一格式才能精确匹配。 */
+    private static String failureReason(String query, String detail) {
+        return "DexKit " + query + ": " + detail;
+    }
+
+    /**
+     * 查询身份文本：类名#方法名 + 完整签名（参数/返回）+ anchor 集合。
+     *
+     * 失败记账按该文本精确匹配撤销（{@link #clearFailure}），因此身份必须包含
+     * 参与定位的全部维度：同一个 class#method 的不同签名（或不同 anchor 集合）
+     * 是不同查询，只按 class#method 生成文本会让它们共享失败串——其中一个
+     * attempt2 成功时会把另一个仍然有效的失败一起清掉，skipReason 变 null 后
+     * {@code Hooks.markCriticalIfNoMount} 不再标记 critical。
+     * 两者都缺时退化为 anchor 集合（仍带签名），保证 WARN 与 HookState 明细
+     * 始终能定位到具体查询。包内可见供单测。
+     */
+    static String queryLabel(String classHint, String methodName, Class<?> returnType,
+                             Class<?>[] paramTypes, String... anchors) {
+        StringBuilder sb = new StringBuilder();
+        if (classHint != null && !classHint.isEmpty()) {
+            sb.append(classHint);
+        }
+        if (methodName != null && !methodName.isEmpty()) {
+            if (sb.length() > 0) {
+                sb.append('#');
+            }
+            sb.append(methodName);
+        }
+        String params = paramSignature(paramTypes);
+        // 参数为空数组与 null 语义相同（都不限制参数），归一化为 ()。
+        if (sb.length() > 0 || returnType != null || !params.isEmpty()) {
+            sb.append('(').append(params).append(')');
+            if (returnType != null) {
+                sb.append(':').append(returnType.getName());
+            }
+        }
+        String key = anchorKey(anchors);
+        if (key != null) {
+            if (sb.length() > 0) {
+                sb.append(' ');
+            }
+            sb.append("[anchors=").append(key).append(']');
+        }
+        if (sb.length() == 0) {
+            sb.append("<empty query>");
+        }
+        return sb.toString();
+    }
+
+    private static String describe(Throwable t) {
+        if (t == null) {
+            return "null";
+        }
+        String message = t.getMessage();
+        return t.getClass().getSimpleName() + (message == null ? "" : ": " + message);
+    }
+
+    /**
+     * 单调时钟；取不到时返回 0（0 表示“从未失败”，只会放宽重试，不会永久短路）。
+     * 保证 getBridge 的失败路径在任何环境下都不向外抛。
+     */
+    private static long elapsedRealtimeMs() {
+        try {
+            return android.os.SystemClock.elapsedRealtime();
+        } catch (Throwable t) {
+            return 0L;
+        }
     }
 
     /**
@@ -128,14 +255,19 @@ public final class DexKitLocator {
      *  不再重复扫描。候选通过签名校验后还要求唯一（见 selectMatchingMethod）：
      *  多个同签名候选一律拒绝猜测，按未命中处理，由调用方走可见的 markNotFound。
      *  第一次不限制类名（classHint 为空），但仍会按 methodName + anchors 查询。
+     *
+     * @param feature 失败记账归属的功能；为 null 时只打 WARN 不写 HookState
+     *                （保留无功能上下文的调用方式）。
      */
-    public static Method findMethod(ClassLoader cl, String classHint, String methodName,
-                                    Class<?> returnType, Class<?>[] paramTypes, String... anchors) {
+    public static Method findMethod(ClassLoader cl, Feature feature, String classHint,
+                                    String methodName, Class<?> returnType,
+                                    Class<?>[] paramTypes, String... anchors) {
         if (!sEnabled) {
             // 非主进程直接跳过：调用方此前已尝试类名/方法名直取，DexKit 只是最后的兜底。
             Log.w(TAG, "dexkit disabled in non-main process");
             return null;
         }
+        String query = queryLabel(classHint, methodName, returnType, paramTypes, anchors);
         if (cl == null || anchors == null || anchors.length == 0) {
             return null;
         }
@@ -157,14 +289,51 @@ public final class DexKitLocator {
             return null;
         }
 
-        DexKitBridge bridge = getBridge(cl);
+        DexKitBridge bridge = getBridge(cl, feature, query);
         if (bridge == null) {
-            // native 不可用由 getBridge 的失败短路兜住，这里不记负缓存。
+            // native 不可用由 getBridge 的失败短路兜住（WARN + HookState 记账已在那里完成），
+            // 这里不记负缓存，过窗后仍可重试。
             return null;
         }
 
+        Method found = findMethodAttempts(feature, query, classHint, methodName, anchors,
+                bridge::findMethod,
+                (candidates, attemptLabel) -> selectMatchingMethod(
+                        cl, candidates, returnType, paramTypes,
+                        attemptLabel, classHint, methodName));
+        if (found == null) {
+            // 两次尝试都未定位到方法（attempt1 正常未命中或 attempt2 仍失败）：
+            // 记录负缓存，同一查询不再重复全量扫描。
+            recordMiss(missCache, missKey);
+        }
+        return found;
+    }
+
+    /** 查询执行器：生产实现为 {@code bridge::findMethod}，JVM 单测可注入假实现。 */
+    @FunctionalInterface
+    interface MethodListFinder {
+        MethodDataList find(FindMethod query) throws Throwable;
+    }
+
+    /** 候选选择器：生产实现为 {@code selectMatchingMethod}，JVM 单测可注入假实现。 */
+    @FunctionalInterface
+    interface MethodSelector {
+        Method select(MethodDataList candidates, String attemptLabel) throws Throwable;
+    }
+
+    /**
+     * attempt1/attempt2 查询逻辑；包内可见并允许注入 finder/selector，使
+     * 「attempt1 抛异常 → attempt2 成功」的失败记账撤销可在纯 JVM 单测覆盖
+     * （真实路径依赖 dexkit native 桥，JVM 不可达）。
+     *
+     * 返回 null 表示两次尝试都未定位到方法，负缓存由调用方记录。
+     */
+    static Method findMethodAttempts(Feature feature, String query, String classHint,
+                                     String methodName, String[] anchors,
+                                     MethodListFinder finder, MethodSelector selector) {
         // 第一次：类名 + 方法名 + 锚点（当前版本类名还在时最准）
         boolean attempt1Threw = false;
+        String attempt1Failure = null;
         try {
             FindMethod query1 = FindMethod.create();
             MethodMatcher matcher1 = MethodMatcher.create();
@@ -180,10 +349,9 @@ public final class DexKitLocator {
                 }
             }
             query1.matcher(matcher1);
-            MethodDataList list1 = bridge.findMethod(query1);
+            MethodDataList list1 = finder.find(query1);
             if (list1 != null && !list1.isEmpty()) {
-                Method m = selectMatchingMethod(cl, list1, returnType, paramTypes,
-                        "attempt1", classHint, methodName);
+                Method m = selector.select(list1, "attempt1");
                 if (m != null) {
                     return m;
                 }
@@ -193,7 +361,8 @@ public final class DexKitLocator {
             }
         } catch (Throwable t) {
             attempt1Threw = true;
-            Log.w(TAG, "DexKit findMethod attempt 1 error: " + t.getMessage());
+            attempt1Failure = "attempt 1 error: " + describe(t);
+            warnFailure(feature, query, attempt1Failure);
         }
 
         if (!attempt1Threw) {
@@ -202,9 +371,8 @@ public final class DexKitLocator {
             // 的场景），该自愈路径每次 miss 都要多付一次启动期全量扫描，改由调用方
             // 的类名列表（check-mounts 体检出新名后追加）兜底。记负缓存后直接返回，
             // 同一查询不再重复扫描。
-            Log.w(TAG, "DexKit findMethod miss for " + classHint + "#" + methodName
-                    + " (attempt 1 finished normally); attempt 2 skipped, miss cached");
-            recordMiss(missCache, missKey);
+            warnFailure(feature, query,
+                    "miss (attempt 1 finished normally); attempt 2 skipped, miss cached");
             return null;
         }
 
@@ -220,22 +388,24 @@ public final class DexKitLocator {
                 }
             }
             query2.matcher(matcher2);
-            MethodDataList list2 = bridge.findMethod(query2);
+            MethodDataList list2 = finder.find(query2);
             if (list2 != null && !list2.isEmpty()) {
-                Method m = selectMatchingMethod(cl, list2, returnType, paramTypes,
-                        "attempt2", classHint, methodName);
+                Method m = selector.select(list2, "attempt2");
                 if (m != null) {
+                    // attempt1 的异常已被 attempt2 成功兜底：撤销 attempt1 的失败记账，
+                    // 否则定位成功后诊断页仍会展示假 skip（失败横幅误报）。
+                    clearFailure(feature, query, attempt1Failure);
                     return m;
                 }
             } else {
                 Log.w(TAG, "DexKit findMethod attempt 2: 0 candidates for anchors on "
-                        + classHint + "#" + methodName);
+                        + query);
             }
         } catch (Throwable t) {
-            Log.w(TAG, "DexKit findMethod attempt 2 error: " + t.getMessage());
+            warnFailure(feature, query, "attempt 2 error: " + describe(t));
         }
 
-        recordMiss(missCache, missKey);
+        warnFailure(feature, query, "miss after attempt 2");
         return null;
     }
 

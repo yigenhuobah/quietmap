@@ -3,12 +3,19 @@
 #
 # 用法（Git Bash / Linux / macOS）：
 #   bash tools/check-mounts.sh [APK路径] [--apk APK] [--dexsql PATH] [--aapt2 PATH]
-#                               [--cache-dir DIR]
+#                               [--cache-dir DIR] [--allow-sig] [--allow-gone]
 #
 # 例：
 #   bash tools/check-mounts.sh
 #   bash tools/check-mounts.sh ~/Downloads/base.apk
 #   TARGET_APK=~/Downloads/base.apk bash tools/check-mounts.sh
+#   bash tools/check-mounts.sh --allow-sig   # 已知 SIG 例外，仍返回 0
+#
+# 退出码：
+#   0 = 全部 OK，或 SIG/GONE 全部被 --allow-sig / --allow-gone 显式放行
+#   1 = 存在未放行的 SIG 或 GONE（升级回归，需要重新定位）
+#   2 = 参数/输入错误（APK/dexsql 缺失等）
+#   3 = dexsql 查询失败
 #
 # 参数优先级: CLI > 环境变量 > 常见安装路径。
 # 环境变量:
@@ -52,20 +59,26 @@ DEXSQL="${DEXSQL:-}"
 AAPT2="${AAPT2:-}"
 CACHE_DIR=""
 POSITIONAL=""
+ALLOW_SIG=0
+ALLOW_GONE=0
 
 usage() {
   cat <<'EOF'
 Usage:
   tools/check-mounts.sh [APK_PATH] [--apk APK] [--dexsql PATH] [--aapt2 PATH]
-                        [--cache-dir DIR]
+                        [--cache-dir DIR] [--allow-sig] [--allow-gone]
 
 Arguments:
   APK_PATH / --apk   目标 APK（高德）；也可用 TARGET_APK 环境变量
   --dexsql PATH      dexsql 可执行文件；也可用 DEXSQL
   --aapt2 PATH       aapt2/aapt 可执行文件；也可用 AAPT2（缺失时跳过 versionName 校验）
   --cache-dir DIR    DexSQL 缓存目录；默认 <repo>/tools/.dexsql-cache/<sha256前16位>/
+  --allow-sig        已知 SIG 例外：SIG>0 时仍返回 0
+  --allow-gone       已知 GONE 例外：GONE>0 时仍返回 0
   -h, --help         显示本帮助
 
+Exit codes: 0=OK（或例外已放行）, 1=未放行的 SIG/GONE, 2=参数/输入错误,
+            3=dexsql 查询失败.
 Resolution order: CLI > environment > common install paths.
 EOF
 }
@@ -92,6 +105,10 @@ while [ $# -gt 0 ]; do
       CACHE_DIR="$2"; shift 2 ;;
     --cache-dir=*)
       CACHE_DIR="${1#*=}"; shift ;;
+    --allow-sig)
+      ALLOW_SIG=1; shift ;;
+    --allow-gone)
+      ALLOW_GONE=1; shift ;;
     -h|--help)
       usage; exit 0 ;;
     -*)
@@ -530,6 +547,22 @@ echo "签名校验: 完整描述符（方法名 + 参数 + 返回类型），无
 echo "汇总: 共 $total 项 — OK $ok / SIG $sig / GONE $gone"
 if [ "$sig" -eq 0 ] && [ "$gone" -eq 0 ]; then
   echo "二十二钩子挂载点全部存活。"
+  exit 0
+fi
+
+status=0
+if [ "$sig" -gt 0 ] && [ "$ALLOW_SIG" -eq 0 ]; then
+  echo "FAIL: SIG=$sig 项未放行（签名/锚点变化，需要重新定位）。" >&2
+  status=1
+fi
+if [ "$gone" -gt 0 ] && [ "$ALLOW_GONE" -eq 0 ]; then
+  echo "FAIL: GONE=$gone 项未放行（类已不存在，需要重新定位）。" >&2
+  status=1
+fi
+if [ "$status" -eq 0 ]; then
+  echo "已知例外已显式放行：SIG=$sig / GONE=$gone（--allow-sig/--allow-gone）。"
 else
   echo "OK=还在；SIG=类在但签名/锚点变了；GONE=类没了。变的项要重新用 dexsql 定位。"
+  echo "如确认是已知例外，可加 --allow-sig / --allow-gone 显式放行。"
 fi
+exit "$status"

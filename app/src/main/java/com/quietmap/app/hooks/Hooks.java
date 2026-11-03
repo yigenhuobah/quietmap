@@ -85,6 +85,31 @@ public final class Hooks {
     }
 
     /**
+     * 启动诊断回传，任何失败只记日志并返回 false：调用点在逐 Feature 安装之前，
+     * 异常若逃逸会让整轮安装中止（所有功能静默不落钩），诊断不可用不能升级成
+     * 功能不可用。包内可见，供 HooksTest 注入抛错启动动作验证隔离契约。
+     */
+    static boolean startReportQuietly(XposedModule module) {
+        return startReportQuietly(module, Report::start);
+    }
+
+    static boolean startReportQuietly(XposedModule module, Runnable starter) {
+        try {
+            starter.run();
+            return true;
+        } catch (Throwable t) {
+            try {
+                if (module != null) {
+                    module.log(Log.WARN, TAG, "report start failed; hook install continues", t);
+                }
+            } catch (Throwable ignored) {
+                // 日志出口自身也不得让安装失败。
+            }
+            return false;
+        }
+    }
+
+    /**
      * @param mainProcess 当前是否为主进程（进程名 == 包名）。非主进程（:locationservice、
      *                    :widgetProvider）关闭 DexKit：那里只需要类名/方法名兜底（Wave 1 已把
      *                    类名命中放在 DexKit 之前），不值得付出 native 全 dex 扫描成本。
@@ -108,7 +133,9 @@ public final class Hooks {
             return;
         }
         if (shouldStartReport(mainProcess)) {
-            Report.start();
+            // 诊断回传启动失败（调度线程/上下文异常）不得中止本轮安装：
+            // Report.start 在 per-feature try 之外，异常逃逸会让后面所有功能都不落钩。
+            startReportQuietly(module);
         }
         for (Feature f : Feature.values()) {
             if (!shouldInstall(f, config.enabled(f))) {

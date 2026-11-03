@@ -11,6 +11,7 @@ import com.quietmap.app.HookState;
 import org.junit.Test;
 
 import java.lang.reflect.Method;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * INSTALLERS 注册完整性：非 blocked Feature 必须全部有安装器，
@@ -198,6 +199,29 @@ public class HooksTest {
     public void reportOnlyStartsInMainProcess() {
         assertTrue("主进程必须启动诊断回传", Hooks.shouldStartReport(true));
         assertFalse("子进程不得启动诊断回传", Hooks.shouldStartReport(false));
+    }
+
+    /**
+     * Report.start() 在 per-feature try 之外：它抛错必须被吞掉，否则本轮
+     * 所有功能都不会安装。installAll 调用的就是 startReportQuietly，
+     * 这里注入抛错启动动作验证「异常不逃逸 + 返回 false」。
+     */
+    @Test
+    public void reportStartFailureIsIsolated() {
+        AtomicBoolean ran = new AtomicBoolean(false);
+        boolean started = Hooks.startReportQuietly(null, () -> {
+            ran.set(true);
+            throw new IllegalStateException("scheduler unavailable");
+        });
+        assertTrue("启动动作必须被执行一次", ran.get());
+        assertFalse("Report.start 抛错时必须报告启动失败", started);
+    }
+
+    @Test
+    public void reportStartSuccessReportsTrue() {
+        AtomicBoolean ran = new AtomicBoolean(false);
+        assertTrue(Hooks.startReportQuietly(null, () -> ran.set(true)));
+        assertTrue(ran.get());
     }
 
     @Test

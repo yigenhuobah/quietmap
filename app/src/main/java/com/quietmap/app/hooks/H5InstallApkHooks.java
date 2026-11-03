@@ -148,7 +148,7 @@ final class H5InstallApkHooks {
     private static void finishLateAnchor(XposedModule module, Feature f, ClassLoader cl) {
         Method m = null;
         try {
-            m = DexKitLocator.findMethod(cl, null, DISPATCH_METHOD, boolean.class,
+            m = DexKitLocator.findMethod(cl, f, null, DISPATCH_METHOD, boolean.class,
                     new Class<?>[]{Intent.class}, DISPATCH_ANCHORS);
         } catch (Throwable t) {
             HookKit.error(module, f.id + " late dexkit anchor error " + DISPATCH_LABEL, t);

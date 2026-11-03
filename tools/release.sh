@@ -16,6 +16,9 @@
 #   --no-release   不创建 GitHub Release
 #   --no-official  不同步 LSPosed 官方仓库
 #   --allow-dirty  允许工作区有未提交改动
+#   --host-apk APK 宿主 APK（高德地图 安装包），用于挂载点硬门禁；也可用 HOST_APK
+#   --dexsql PATH  dexsql 可执行文件，配合 --host-apk 做静态体检；也可用 DEXSQL
+#   --skip-mounts  跳过宿主 APK 挂载点门禁（显式跳过，缺失 host-apk/dexsql 时不再报错）
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,6 +38,9 @@ NO_PUSH=0
 NO_RELEASE=0
 NO_OFFICIAL=0
 ALLOW_DIRTY=0
+HOST_APK="${HOST_APK:-}"
+DEXSQL="${DEXSQL:-}"
+SKIP_MOUNTS=0
 
 CLEANUP_DIRS=()
 
@@ -52,7 +58,7 @@ die() {
 }
 
 usage() {
-    sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 cleanup() {
@@ -90,6 +96,15 @@ while [ $# -gt 0 ]; do
         --no-release) NO_RELEASE=1 ;;
         --no-official) NO_OFFICIAL=1 ;;
         --allow-dirty) ALLOW_DIRTY=1 ;;
+        --host-apk)
+            [ $# -ge 2 ] || die "--host-apk 需要一个路径"
+            HOST_APK="$2"; shift ;;
+        --host-apk=*) HOST_APK="${1#*=}" ;;
+        --dexsql)
+            [ $# -ge 2 ] || die "--dexsql 需要一个路径"
+            DEXSQL="$2"; shift ;;
+        --dexsql=*) DEXSQL="${1#*=}" ;;
+        --skip-mounts) SKIP_MOUNTS=1 ;;
         -h|--help) usage; exit 0 ;;
         *) die "未知参数：$1（见 --help）" ;;
     esac
@@ -239,9 +254,45 @@ else
     run ./gradlew "${GRADLE_ARGS[@]}" --console=plain
 fi
 
+# ---------- 宿主 APK 挂载点硬门禁 ----------
+is_executable_file() {
+    local path="$1"
+    [ -n "$path" ] && [ -f "$path" ] || return 1
+    case "$path" in
+        *.exe|*.EXE) return 0 ;;
+    esac
+    [ -x "$path" ]
+}
+
+mount_gate() {
+    if [ "$SKIP_MOUNTS" -eq 1 ]; then
+        log "--skip-mounts：跳过宿主 APK 挂载点门禁"
+        return 0
+    fi
+    [ -n "$HOST_APK" ] || \
+        die "未指定宿主 APK：加 --host-apk /path/to/base.apk（或 --skip-mounts 显式跳过挂载点门禁）"
+    [ -f "$HOST_APK" ] || \
+        die "宿主 APK 不存在：$HOST_APK（用 --host-apk 指定正确路径，或 --skip-mounts 显式跳过）"
+    [ -n "$DEXSQL" ] || \
+        die "未指定 dexsql：加 --dexsql /path/to/dexsql（或 --skip-mounts 显式跳过挂载点门禁）"
+    if ! is_executable_file "$DEXSQL" && ! command -v "$DEXSQL" >/dev/null 2>&1; then
+        die "dexsql 不存在或不可执行：$DEXSQL（用 --dexsql 指定正确路径，或 --skip-mounts 显式跳过）"
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '[dry-run] bash %s --apk %s --dexsql %s\n' \
+            "$SCRIPT_DIR/check-mounts.sh" "$HOST_APK" "$DEXSQL"
+        return 0
+    fi
+    log "宿主 APK 挂载点门禁：$HOST_APK"
+    bash "$SCRIPT_DIR/check-mounts.sh" --apk "$HOST_APK" --dexsql "$DEXSQL" \
+        || die "check-mounts 未通过（宿主 APK 与锚点/挂载表不一致）；修复后重试，或 --skip-mounts 显式跳过"
+}
+mount_gate
+
 if [ "$DRY_RUN" -eq 1 ]; then
     printf '[dry-run] bash %s %s --expected-version %s --expected-code %s --out-dir %s\n' \
         "$SCRIPT_DIR/verify-apk.sh" "$APK" "$VERSION" "$VERSION_CODE" "$ARTIFACT_DIR"
+    printf '[dry-run] cp %s %s/%s\n' "$APK" "$ARTIFACT_DIR" "$(basename "$APK")"
     printf '[dry-run] cp %s %s/mapping.txt\n' "$MAPPING" "$ARTIFACT_DIR"
     printf '[dry-run] write %s/release-notes.md\n' "$ARTIFACT_DIR"
 fi
@@ -256,6 +307,7 @@ if [ "$DRY_RUN" -eq 0 ]; then
         --expected-version "$VERSION" \
         --expected-code "$VERSION_CODE" \
         --out-dir "$ARTIFACT_DIR"
+    cp "$APK" "$ARTIFACT_DIR/$(basename "$APK")"
     cp "$MAPPING" "$ARTIFACT_DIR/mapping.txt"
     printf '%s\n' "$NOTES" > "$ARTIFACT_DIR/release-notes.md"
     log "产物已归档：$ARTIFACT_DIR"
@@ -273,6 +325,10 @@ publish_source_tag() {
     fi
     if [ "$DRY_RUN" -eq 0 ] && git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
         die "源码 tag v${VERSION} 已存在"
+    fi
+    # tag 必须指向远端已有的提交：先推当前分支，再打 tag/push tag。
+    if [ "$NO_PUSH" -eq 0 ]; then
+        run git push origin HEAD
     fi
     run git tag -a "v${VERSION}" -m "v${VERSION}"
     if [ "$NO_PUSH" -eq 1 ]; then

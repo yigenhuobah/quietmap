@@ -27,6 +27,12 @@ public final class HookState {
         final Set<String> labels = ConcurrentHashMap.newKeySet();
         /** 主锚点整体失效的原因集合；非空即表示该功能没有任何可用挂载点。 */
         final Set<String> criticalSkips = ConcurrentHashMap.newKeySet();
+        /**
+         * DexKit 定位失败明细（native 初始化失败 / 查询异常 / 未命中）。
+         * 与 skip 分开保存：调用方随后会写更笼统的「锚定失败」，
+         * 直接覆盖 skip 会丢掉可定位的查询/类名信息。
+         */
+        final Set<String> dexkitFailures = ConcurrentHashMap.newKeySet();
         final AtomicLong hits = new AtomicLong();
         final AtomicLong entries = new AtomicLong();
         volatile String skip;
@@ -81,17 +87,60 @@ public final class HookState {
     }
 
     /**
-     * 清除该功能的失败标记（skip 原因与 critical 集合）；labels/hits/entries 保留。
+     * DexKit 定位失败记账：native 初始化失败、查询抛异常、扫描未命中。
+     *
+     * 单独存放而不是写 skip：调用方随后会写更笼统的「锚定失败」，直接覆盖会
+     * 丢掉能定位问题的查询/类名。{@link #skipReason} 会把明细合并进诊断文本，
+     * 既不改变调用方 skip 的主语义，也让失败在诊断页可见。
+     */
+    public static void markDexKitFailure(Feature f, String reason) {
+        if (reason != null) {
+            state(f).dexkitFailures.add(reason);
+        }
+    }
+
+    /** 本会话该功能的 DexKit 失败明细（排序副本）；无失败返回空列表。 */
+    public static List<String> dexKitFailures(Feature f) {
+        State s = STATES.get(f);
+        if (s == null) {
+            return Collections.emptyList();
+        }
+        List<String> out = new ArrayList<>(s.dexkitFailures);
+        Collections.sort(out);
+        return out;
+    }
+
+    /**
+     * 撤销一条已记录的 DexKit 失败明细（精确匹配）。
+     *
+     * 用于 attempt1 抛异常、attempt2 成功兜底的场景：attempt1 的异常不再代表
+     * 本次定位失败，若留在明细里会让诊断页继续展示假 skip。只删除完全匹配的
+     * 条目，同功能其他查询/native 初始化失败不受影响。
+     */
+    public static void clearDexKitFailure(Feature f, String reason) {
+        if (reason == null) {
+            return;
+        }
+        State s = STATES.get(f);
+        if (s != null) {
+            s.dexkitFailures.remove(reason);
+        }
+    }
+
+    /**
+     * 清除该功能的失败标记（skip 原因、critical 集合与 DexKit 失败明细）；
+     * labels/hits/entries 保留。
      *
      * 用于 QuietMapModule 回滚 sInstalled 后的重试：失败标记只增不清，上一轮安装
-     * 记下的 skip/crit 若不在下一轮安装前清掉，重试成功的功能会继续上报 crit=1
-     * 与「无可用挂载点」，诊断页和失败横幅会把已挂载的功能判成整体失效。
+     * 记下的 skip/crit/dexkit 若不在下一轮安装前清掉，重试成功的功能会继续上报
+     * crit=1 与「无可用挂载点」，诊断页和失败横幅会把已挂载的功能判成整体失效。
      * 重试要么以干净状态成功，要么重新记录本轮的真实失败。
      */
     public static void clearFailures(Feature f) {
         State s = STATES.get(f);
         if (s != null) {
             s.criticalSkips.clear();
+            s.dexkitFailures.clear();
             s.skip = null;
         }
     }
@@ -142,8 +191,36 @@ public final class HookState {
         return s == null ? 0L : s.entries.get();
     }
 
+    /**
+     * 诊断页展示的 skip 文本：调用方写入的 skip 优先；存在 DexKit 失败明细时
+     * 追加一条（排序后取第一条），保证「锚定失败」不会掩盖具体查询/异常。
+     * 无任何失败返回 null。
+     */
     public static String skipReason(Feature f) {
         State s = STATES.get(f);
-        return s == null ? null : s.skip;
+        if (s == null) {
+            return null;
+        }
+        return composeSkipReason(s.skip, s.dexkitFailures);
+    }
+
+    /**
+     * skip 文本组合的纯逻辑（包内可见供单测）：先对失败明细做快照再判空。
+     *
+     * 不能先 {@code isEmpty()} 再 {@code Collections.min(集合)}：clearFailures
+     * 会在其他线程清空 dexkitFailures，两步之间被清空时 min 会抛
+     * NoSuchElementException（被 Report 的 catch 吞掉，表现为漏报一轮）。
+     * 快照后所有判断都基于同一份数据，并发清空最多得到空快照。
+     */
+    static String composeSkipReason(String skip, Set<String> dexkitFailures) {
+        List<String> snapshot = new ArrayList<>(dexkitFailures);
+        String dexkit = snapshot.isEmpty() ? null : Collections.min(snapshot);
+        if (skip == null) {
+            return dexkit;
+        }
+        if (dexkit == null) {
+            return skip;
+        }
+        return skip + " | " + dexkit;
     }
 }

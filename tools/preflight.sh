@@ -82,11 +82,26 @@ info "android sdk: $SDK_SOURCE"
 # ------------------------------------------------- README 版本一致性
 # 「当前版本」长期不随 build.gradle 更新，README 与发布页会对不上；这里提前硬失败。
 VERSION_NAME="$(sed -nE "s/^[[:space:]]*versionName[[:space:]]+['\"]([^'\"]+)['\"].*/\1/p" app/build.gradle | head -n 1)"
+VERSION_CODE="$(sed -nE 's/^[[:space:]]*versionCode[[:space:]]+([0-9]+).*/\1/p' app/build.gradle | head -n 1)"
 [ -n "$VERSION_NAME" ] || fail "cannot parse versionName from app/build.gradle"
-if ! head -n 12 README.md | grep -qF "$VERSION_NAME"; then
-    fail "README.md 首屏未包含当前 versionName ($VERSION_NAME)：请同步「当前版本」"
+[ -n "$VERSION_CODE" ] || fail "cannot parse versionCode from app/build.gradle"
+README_HEAD="$(head -n 12 README.md)"
+printf '%s\n' "$README_HEAD" | grep -qF "$VERSION_NAME" \
+    || fail "README.md 首屏未包含当前 versionName ($VERSION_NAME)：请同步「当前版本」"
+printf '%s\n' "$README_HEAD" | grep -qF "versionCode $VERSION_CODE" \
+    || fail "README.md 首屏未包含当前 versionCode ($VERSION_CODE)：请同步「当前版本」"
+info "readme version: $VERSION_NAME (versionCode $VERSION_CODE)"
+
+# CHANGELOG 必须有当前版本的非空小节，防止无条目或「修复若干」发布。
+if ! awk -v v="$VERSION_NAME" '
+    $0 ~ "^## " v "([[:space:]]|$)" { in_section = 1; next }
+    in_section && /^## / { exit }
+    in_section && NF { found = 1 }
+    END { exit found ? 0 : 1 }
+' CHANGELOG.md; then
+    fail "CHANGELOG.md 缺少 $VERSION_NAME 的非空小节"
 fi
-info "readme version: $VERSION_NAME"
+info "changelog section: $VERSION_NAME"
 
 # ---------------------------------------------------------------- tests + lint
 info "running ./gradlew :app:testDebugUnitTest :app:lintDebug"

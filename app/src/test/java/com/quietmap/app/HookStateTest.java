@@ -7,7 +7,11 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
+import java.util.AbstractSet;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.Set;
 
 /**
  * HookState 的纯 JVM 行为：命中计数、标签排序、skip 原因保留。
@@ -114,5 +118,37 @@ public class HookStateTest {
         HookState.clearFailures(f);
         assertFalse(HookState.hasCriticalSkip(f));
         assertNull(HookState.skipReason(f));
+    }
+
+    /**
+     * 回归：clearFailures 可能在 skipReason 的 isEmpty() 与 Collections.min()
+     * 之间并发清空 dexkitFailures。修复前集合报告非空、迭代器却已为空，
+     * Collections.min 抛 NoSuchElementException（被 Report 的 catch 吞掉，
+     * 表现为漏报一轮）。这里用「isEmpty 恒 false、迭代器为空」的集合精确
+     * 复现该交错，要求组合逻辑不抛异常。
+     */
+    @Test
+    public void skipReasonToleratesFailuresClearedBetweenEmptyCheckAndMin() {
+        Set<String> clearedMidRead = new AbstractSet<String>() {
+            @Override
+            public Iterator<String> iterator() {
+                return Collections.emptyIterator();
+            }
+
+            @Override
+            public int size() {
+                return 0;
+            }
+
+            @Override
+            public boolean isEmpty() {
+                return false;
+            }
+        };
+
+        assertNull("明细被并发清空时不得抛异常",
+                HookState.composeSkipReason(null, clearedMidRead));
+        assertEquals("调用方 skip 文本仍须保留", "锚定失败",
+                HookState.composeSkipReason("锚定失败", clearedMidRead));
     }
 }

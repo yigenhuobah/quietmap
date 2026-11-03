@@ -165,7 +165,7 @@ final class HookKit {
                                  String[] anchors) {
         Method m = null;
         try {
-            m = DexKitLocator.findMethod(cl, classHint, methodName, returnType,
+            m = DexKitLocator.findMethod(cl, f, classHint, methodName, returnType,
                     paramTypes, anchors);
         } catch (Throwable t) {
             error(module, f.id + " late dexkit anchor error " + label, t);
