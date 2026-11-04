@@ -7,6 +7,7 @@ import org.junit.Test;
 
 import java.io.File;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -124,6 +125,76 @@ public class StatusProviderTest {
                 provider.value("", ReportProtocol.KEY_CRASH_2));
         assertEquals("崩溃记录不改变失败统计", 0,
                 StatusProvider.failedFeatureCount(provider, f -> true, NOW));
+    }
+
+    // ------------------------------------------------------- 崩溃路径同步落盘
+
+    @Test
+    public void syncApplyReportUsesCommitAndReturnsChanged() {
+        FakeSharedPreferences sp = new FakeSharedPreferences();
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("reg.splash_gate", "canShowSplash");
+        data.put("hit.splash_gate", "3");
+
+        Boolean applied = StatusProvider.applyReport(sp, data, "t1-test", true,
+                ReportProtocol.SOURCE_PROVIDER, true);
+
+        assertEquals(Boolean.TRUE, applied);
+        assertEquals("sync=true 必须走 commit()", 1, sp.commitCount());
+        assertEquals("sync=true 不得走 apply()", 0, sp.applyCount());
+        assertEquals("canShowSplash", sp.values().get("v:reg.splash_gate"));
+        assertEquals(3L, sp.values().get("v:hit.splash_gate"));
+        assertEquals("t1-test", sp.values().get(StatusProvider.PREFS_SESSION));
+    }
+
+    @Test
+    public void syncApplyReportCommitFailureReturnsNullAndWritesNothing() {
+        FakeSharedPreferences sp = new FakeSharedPreferences();
+        sp.setCommitResult(false);
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("reg.splash_gate", "canShowSplash");
+
+        Boolean applied = StatusProvider.applyReport(sp, data, "t1-test", true,
+                ReportProtocol.SOURCE_PROVIDER, true);
+
+        assertNull("commit 失败必须返回 null，调用方才能继续走文件兜底", applied);
+        assertEquals("commit 失败时不得更新内存值", 0, sp.values().size());
+        assertEquals(1, sp.commitCount());
+        assertEquals(0, sp.applyCount());
+    }
+
+    @Test
+    public void normalApplyReportKeepsAsyncApply() {
+        FakeSharedPreferences sp = new FakeSharedPreferences();
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("reg.splash_gate", "canShowSplash");
+
+        Boolean applied = StatusProvider.applyReport(sp, data, "t1-test", true,
+                ReportProtocol.SOURCE_PROVIDER, false);
+
+        assertEquals(Boolean.TRUE, applied);
+        assertEquals("常规心跳不得同步 commit", 0, sp.commitCount());
+        assertEquals(1, sp.applyCount());
+        assertEquals("canShowSplash", sp.values().get("v:reg.splash_gate"));
+    }
+
+    @Test
+    public void syncApplyReportCommitsSessionMarkerEvenWithoutDataChange() {
+        FakeSharedPreferences sp = new FakeSharedPreferences();
+        sp.values().put(StatusProvider.PREFS_SESSION, "t1-test");
+        sp.values().put("v:reg.splash_gate", "canShowSplash");
+        sp.values().put(StatusProvider.PREFS_UPDATED_AT,
+                System.currentTimeMillis());
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("reg.splash_gate", "canShowSplash");
+
+        Boolean applied = StatusProvider.applyReport(sp, data, "t1-test", true,
+                ReportProtocol.SOURCE_PROVIDER, true);
+
+        assertEquals("内容没变返回 false（没有实际数据变更）", Boolean.FALSE, applied);
+        assertEquals("session 标记仍会写入，sync 下必须 commit 后才能返回",
+                1, sp.commitCount());
+        assertEquals(0, sp.applyCount());
     }
 
     private static ReportFileStore.Entry entry(Map<String, String> data) {

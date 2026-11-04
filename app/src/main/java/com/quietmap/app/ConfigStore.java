@@ -11,6 +11,8 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import io.github.yigenhuobah.core.ConfigPolicy;
+
 /**
  * 模块 App 侧的开关读写。
  *
@@ -113,7 +115,9 @@ final class ConfigStore {
      * 真正是否落盘由 {@link WriteCallback#onResult(boolean)} 告知。
      */
     boolean put(String key, boolean value, WriteCallback callback) {
-        if (!mRemote || mNewStore == null) {
+        // core 的写入口决策：remote 不可用一律拒绝，绝不拿本地 apply 冒充成功。
+        boolean accepted = ConfigPolicy.accepted(ConfigPolicy.decide(mRemote));
+        if (!accepted || mNewStore == null) {
             logW("config write rejected: remote prefs unavailable: " + key, null);
             return false;
         }
@@ -124,20 +128,19 @@ final class ConfigStore {
                 // doCommit），再读 store 会把从未落盘的值当成已确认值，连续两次
                 // 失败就会滚回到一个目标进程根本读不到的状态；此时只能沿用已记录
                 // 的确认值。没有记录说明 store 对该 key 仍是干净的，读到的即已落盘值。
-                Boolean before;
-                if (mCommittedAbsent.contains(key)) {
-                    before = null;
-                } else {
-                    Boolean confirmed = mCommittedFallback.get(key);
-                    before = confirmed != null ? confirmed : readQuietly(mNewStore, key);
-                }
+                // 决策顺序（确认值 → 基线 → 兜底）由 core.ConfigPolicy 固定。
+                boolean absent = mCommittedAbsent.contains(key);
+                Boolean confirmed = absent ? null : mCommittedFallback.get(key);
+                Boolean baseline = absent || confirmed != null
+                        ? null : readQuietly(mNewStore, key);
+                Boolean before = ConfigPolicy.rollbackValue(confirmed, baseline, null);
                 boolean committed = false;
                 try {
                     committed = mNewStore.put(key, value);
                 } catch (Throwable t) {
                     logW("config write failed: " + key, t);
                 }
-                if (committed) {
+                if (ConfigPolicy.keepUiState(accepted, committed)) {
                     mCommittedFallback.remove(key);
                     mCommittedAbsent.remove(key);
                 } else {
@@ -165,9 +168,13 @@ final class ConfigStore {
         }
     }
 
-    /** 纯决策：store 缺失或 service 换绑时必须重建。 */
-    static boolean needsRebuild(boolean hasStore, boolean sameService) {
-        return !hasStore || !sameService;
+    /**
+     * 纯决策：store 缺失或 service 换绑时必须重建。
+     * 复用条件由 core.ConfigPolicy 统一：同一 service 实例内 remote preferences
+     * 不变，可以复用；换绑后继续使用会指向已失效的 binder。
+     */
+    static boolean needsRebuild(boolean hasStore, Object cachedService, Object currentService) {
+        return !ConfigPolicy.reuseStore(hasStore, cachedService, currentService);
     }
 
     private static Boolean readQuietly(Store store, String key) {

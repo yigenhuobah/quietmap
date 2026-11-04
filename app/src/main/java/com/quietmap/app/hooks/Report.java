@@ -48,7 +48,7 @@ import java.util.concurrent.TimeUnit;
  * 按毫秒排序会整批拒绝并冻结诊断页。主进程会把 session/是否主进程一并回传，
  * 供服务端在新会话开始时清理旧数据。
  */
-final class Report {
+public final class Report {
 
     private static final String TAG = "QuietMap";
     private static final int MAX_VALUE = 256;
@@ -109,19 +109,53 @@ final class Report {
     }
 
     private static void flush() {
+        flush(false, false);
+    }
+
+    /**
+     * 崩溃路径的同步 flush（ALL-CRASH-01）：跳过去重/心跳与 60 秒失败退避，
+     * 立刻把当前快照（含刚记录的 crash0）投递一次。
+     *
+     * <p>落盘语义：socket 等待服务端 ACK；Provider 通道以 sync=true 调用，
+     * 模块 App 侧改用 {@code SharedPreferences.commit()} 同步落盘，commit 失败
+     * 会在结果 Bundle 中返回 ok=false，本方法继续走文件通道 fsync 后原子 rename
+     * 的兜底。常规 3 秒心跳仍用 apply()，不阻塞目标进程。任何通道异常都在
+     * {@link #deliver} 内部吞掉；本方法再整体兜一层，保证崩溃处理链绝不会因
+     * 诊断回传抛异常。
+     *
+     * <p>生产调用点只有 {@code QuietMapModule} 的 UEH：
+     * {@code CrashFlush.runBestEffort(() -> Report.flushNow(), 200, logger, TAG)}。
+     */
+    public static void flushNow() {
+        try {
+            // force=true 跳过节流；sync=true 要求 Provider 用 commit() 同步落盘。
+            flush(true, true);
+        } catch (Throwable ignored) {
+            // 崩溃路径 fail-safe：诊断回传失败不能影响原异常处理。
+        }
+    }
+
+    private static void flush(boolean force, boolean sync) {
         Map<String, String> batch = snapshot();
         long now = System.currentTimeMillis();
-        if (!shouldSend(batch, sLast, SESSION, sLastSession, now, sLastSentAt)) {
+        if (!force && !shouldSend(batch, sLast, SESSION, sLastSession, now, sLastSentAt)) {
             return;
         }
-        if (now < sNextTry) {
+        if (!force && now < sNextTry) {
             return;
         }
         String json = ReportSocketProtocol.message(now, SESSION, true, batch);
-        String used = deliver(
-                () -> ReportSocketSink.write(json),
-                () -> sendProvider(batch),
-                () -> sendFile(batch, now));
+        String used = sync
+                // 崩溃路径：文件 fsync+rename 是最可靠的落盘方式，优先执行；
+                // socket 的 ACK 读超时 1500ms 远大于 CrashFlush 的 200ms 预算。
+                ? deliver(
+                        () -> sendFile(batch, now, true),
+                        () -> sendProvider(batch, true),
+                        () -> ReportSocketSink.write(json))
+                : deliver(
+                        () -> ReportSocketSink.write(json),
+                        () -> sendProvider(batch, false),
+                        () -> sendFile(batch, now, force));
         if ("socket".equals(used) || "provider".equals(used)) {
             sLast = batch;
             sLastSession = SESSION;
@@ -193,8 +227,14 @@ final class Report {
         }
     }
 
-    /** Provider 通道；返回 true 表示 call() 正常返回。 */
-    private static boolean sendProvider(Map<String, String> batch) {
+    /**
+     * Provider 通道；只有 call() 返回且结果 Bundle 的 ok=true 才视为成功。
+     *
+     * <p>sync=true（崩溃路径）要求模块 App 用 commit() 同步落盘。commit 失败时
+     * call() 返回 ok=false，这里必须返回 false，让 {@link #deliver} 继续尝试文件
+     * fsync+rename 兜底；不能因为拿到了非 null 的 Bundle 就当成已落盘。
+     */
+    private static boolean sendProvider(Map<String, String> batch, boolean sync) {
         Context context = context();
         if (context == null) {
             return false;
@@ -209,15 +249,18 @@ final class Report {
         extras.putStringArray("values", values.toArray(new String[0]));
         extras.putString("session", SESSION);
         extras.putBoolean("main", true);
+        extras.putBoolean(StatusProvider.EXTRA_SYNC, sync);
         try {
             Bundle result = context.getContentResolver().call(
                     Uri.parse("content://" + StatusProvider.AUTHORITY), "report", null, extras);
-            if (result != null) {
+            if (result != null && result.getBoolean(StatusProvider.RESULT_OK, false)) {
                 return true;
             }
-            // call() 返回 null 视为 provider 暂不可达：不更新 sLast，60 秒后再试。
+            // result 为 null（Provider 不可达）或 ok=false（sync commit 失败/批次
+            // 被拒）都按失败处理：不更新 sLast，继续交给文件兜底与 60 秒退避。
             if (sErrors++ < 3) {
-                Log.w(TAG, "qmreport transport=provider failed: call returned null");
+                Log.w(TAG, "qmreport transport=provider failed: "
+                        + (result == null ? "call returned null" : "provider reported not ok"));
             }
         } catch (Throwable t) {
             // 模块 App 未启动、被系统拦截等情况：不刷日志，交给外层退避。
@@ -229,12 +272,13 @@ final class Report {
     }
 
     /** 文件调试兜底：仅 socket/Provider 都失败后调用，保留原节流规则。 */
-    private static boolean sendFile(Map<String, String> batch, long now) {
+    private static boolean sendFile(Map<String, String> batch, long now, boolean force) {
         boolean changed = !batch.equals(sLastFile);
-        if (!fileWriteDue(changed, now, sLastFileWriteMs)) {
+        // 崩溃路径（force）必须落盘：进程即将退出，45 秒变化节流/60 秒退避都不能挡。
+        if (!force && !fileWriteDue(changed, now, sLastFileWriteMs)) {
             return false;
         }
-        if (now < sNextFileTry) {
+        if (!force && now < sNextFileTry) {
             return false;
         }
         Context context = context();

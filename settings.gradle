@@ -16,3 +16,11 @@ dependencyResolutionManagement {
 
 rootProject.name = "QuietMap"
 include ':app'
+
+// 四模块共用的纯 JVM 核心库；本地开发用同级目录，CI 用 XPOSED_CORE_PATH 覆盖。
+includeBuild(System.getenv('XPOSED_CORE_PATH') ?: '../../xposed-core') {
+    dependencySubstitution {
+        substitute module('io.github.yigenhuobah:core') using project(':core')
+        substitute module('io.github.yigenhuobah:core-test') using project(':core-test')
+    }
+}

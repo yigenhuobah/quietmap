@@ -150,9 +150,16 @@ public class ConfigStoreTest {
 
     @Test
     public void storeRebuildDecision() {
-        assertTrue("没有 store 时必须重建", ConfigStore.needsRebuild(false, true));
-        assertTrue("service 换绑时必须重建", ConfigStore.needsRebuild(true, false));
-        assertFalse("同一 service 且已有 store 时复用", ConfigStore.needsRebuild(true, true));
+        Object serviceA = new Object();
+        Object serviceB = new Object();
+        assertTrue("没有 store 时必须重建",
+                ConfigStore.needsRebuild(false, serviceA, serviceA));
+        assertTrue("service 换绑时必须重建",
+                ConfigStore.needsRebuild(true, serviceA, serviceB));
+        assertFalse("同一 service 实例且已有 store 时复用",
+                ConfigStore.needsRebuild(true, serviceA, serviceA));
+        assertFalse("缓存与当前 service 同为 null（尚未绑定）时视为同一实例",
+                ConfigStore.needsRebuild(true, null, null));
     }
 
     private static Result writeAndWait(ConfigStore store, String key, boolean value)

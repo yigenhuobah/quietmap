@@ -7,6 +7,7 @@ import androidx.annotation.NonNull;
 
 import com.quietmap.app.dexkit.DexKitLocator;
 import com.quietmap.app.hooks.Hooks;
+import com.quietmap.app.hooks.Report;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,6 +15,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import io.github.libxposed.api.XposedModule;
 import io.github.libxposed.api.XposedModuleInterface;
+import io.github.yigenhuobah.core.CrashFlush;
+import io.github.yigenhuobah.core.Logger;
 
 /**
  * Single Java entry class. API 102 only supports hot reload for modules that declare
@@ -31,6 +34,34 @@ public class QuietMapModule extends XposedModule {
 
     /** 单条崩溃文本上限：在回传 MAX_VALUE=256 之内留键名与通道开销余量。 */
     private static final int MAX_CRASH_CHARS = 240;
+
+    /** ALL-CRASH-01：崩溃路径同步 flush 的硬超时预算（毫秒）。 */
+    static final long CRASH_FLUSH_TIMEOUT_MS = 200L;
+
+    /**
+     * CrashFlush 的日志适配器：任务超时、任务抛异常、等待被中断时由 core 以
+     * WARN 级别回调，这里落到 android.util.Log，真机可直接 grep。日志实现自身
+     * 抛出的异常由 core 吞掉，不影响崩溃处理链。
+     */
+    private static final Logger CRASH_FLUSH_LOGGER = (level, logTag, message, t) -> {
+        switch (level) {
+            case Logger.ERROR:
+                Log.e(logTag, message, t);
+                break;
+            case Logger.WARN:
+                Log.w(logTag, message, t);
+                break;
+            case Logger.INFO:
+                Log.i(logTag, message, t);
+                break;
+            case Logger.DEBUG:
+                Log.d(logTag, message, t);
+                break;
+            default:
+                Log.v(logTag, message, t);
+                break;
+        }
+    };
 
     /**
      * 最近崩溃环（最新在前，最多 3 条）：UEH 在崩溃线程写入，
@@ -108,10 +139,11 @@ public class QuietMapModule extends XposedModule {
 
     /**
      * 幂等包装默认 UEH：previous 先保存，自定义 handler 内先记录崩溃（见
-     * {@link #recordCrash}）再透传 previous（非空时），全程 try/catch——绝不因
-     * 我们抛异常、绝不改变目标 App 原有的异常处理行为。sCrashHandlerInstalled
-     * 保证只包一次。public static 便于 JVM 单测直接验证幂等与透传语义；生产
-     * 路径只有 onPackageReady 的主进程分支调用。
+     * {@link #recordCrash}），再在 200ms 预算内同步 flush 诊断快照
+     * （ALL-CRASH-01，见 {@link #CRASH_FLUSH_TIMEOUT_MS}），最后透传 previous
+     * （非空时），全程 try/catch——绝不因我们抛异常、绝不改变目标 App 原有的
+     * 异常处理行为。sCrashHandlerInstalled 保证只包一次。public static 便于 JVM
+     * 单测直接验证幂等与透传语义；生产路径只有 onPackageReady 的主进程分支调用。
      */
     public static synchronized void installCrashHandler() {
         if (sCrashHandlerInstalled) {
@@ -124,6 +156,14 @@ public class QuietMapModule extends XposedModule {
             try {
                 recordCrash(thread, throwable);
             } catch (Throwable ignored) {
+            }
+            try {
+                // runBestEffort 在 daemon 线程执行，最多等待 200ms；超时、任务异常
+                // 与等待中断都由它捕获并以 WARN 记录，绝不带进 UEH。
+                CrashFlush.runBestEffort(() -> Report.flushNow(),
+                        CRASH_FLUSH_TIMEOUT_MS, CRASH_FLUSH_LOGGER, TAG);
+            } catch (Throwable ignored) {
+                // 再兜一层，确保诊断回传永远不阻断 previous 的透传。
             }
             if (previous != null) {
                 previous.uncaughtException(thread, throwable);

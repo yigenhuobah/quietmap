@@ -172,9 +172,9 @@ public final class ReportSocketServer {
                 return;
             }
             boolean mainProcess = Boolean.TRUE.equals(snapshot.mainProcess());
-            boolean applied = StatusProvider.applyReport(context, snapshot.data(),
-                    snapshot.session(), mainProcess, ReportProtocol.SOURCE_SOCKET);
-            logAccept(snapshot, mainProcess, applied);
+            Boolean applied = StatusProvider.applyReport(context, snapshot.data(),
+                    snapshot.session(), mainProcess, ReportProtocol.SOURCE_SOCKET, false);
+            logAccept(snapshot, mainProcess, Boolean.TRUE.equals(applied));
             writeAck(socket);
         } catch (Throwable t) {
             logWarn("qmreport socket read failed: " + describe(t));

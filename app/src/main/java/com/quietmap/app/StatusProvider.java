@@ -70,6 +70,17 @@ public final class StatusProvider extends ContentProvider {
     /** 落盘时统一加 "v:" 前缀，避免与旧版本可能存在的同名键冲突。 */
     private static final String VALUE_PREFIX = "v:";
 
+    /**
+     * 同步落盘标记：崩溃路径的 flush 要求 Provider 用 commit() 而不是 apply()，
+     * 确保 call() 返回时数据已经写入。普通心跳回传不设置，继续用 apply()。
+     */
+    public static final String EXTRA_SYNC = "sync";
+
+    /** call() 结果 Bundle：Provider 是否成功接受并落盘（commit 失败时为 false）。 */
+    public static final String RESULT_OK = "ok";
+    /** call() 结果 Bundle：本批是否实际改变了存储（仅 RESULT_OK=true 时有效）。 */
+    public static final String RESULT_CHANGED = "changed";
+
     private static final int MAX_ITEMS = 800;
 
     /** Provider.onCreate 在主线程；目录/占位文件 I/O 放到单线程后台初始化。 */
@@ -139,9 +150,18 @@ public final class StatusProvider extends ContentProvider {
                 data.put(keys[i], values[i]);
             }
         }
-        applyReport(context, data, extras.getString("session"),
-                extras.getBoolean("main", false), ReportProtocol.SOURCE_PROVIDER);
-        return new Bundle();
+        Boolean applied = applyReport(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE),
+                data, extras.getString("session"),
+                extras.getBoolean("main", false), ReportProtocol.SOURCE_PROVIDER,
+                extras.getBoolean(EXTRA_SYNC, false));
+        // 结果 Bundle 必须显式携带 ok：sync=true 时 commit() 失败会让 applied
+        // 变成 null，调用方不能只凭“call 返回了非 null Bundle”就认为落盘成功。
+        Bundle result = new Bundle();
+        result.putBoolean(RESULT_OK, applied != null);
+        if (applied != null) {
+            result.putBoolean(RESULT_CHANGED, applied);
+        }
+        return result;
     }
 
     /**
@@ -159,15 +179,18 @@ public final class StatusProvider extends ContentProvider {
      * 也刷新一次，使 failure TTL 不会把仍在正常运行的目标进程判成“未知”。
      * 子进程只合并计数，不刷新时间戳，避免旧 reg/skip 被计数“续命”。
      *
-     * @return true 表示实际写入或执行了会话清理；仅记 session 不算。
+     * @param sync true 时用 {@code commit()} 同步落盘（崩溃路径），false 时用
+     *             {@code apply()} 异步落盘（常规心跳）
+     * @return 是否实际写入或执行了会话清理；仅记 session 不算。
+     *         {@code sync=true} 且 commit 失败时返回 {@code null}——调用方必须
+     *         据此继续走文件 fsync+rename 兜底，不能当成成功。
      */
-    static synchronized boolean applyReport(Context context, Map<String, String> data,
+    static synchronized Boolean applyReport(SharedPreferences sp, Map<String, String> data,
                                             String session, boolean mainProcess,
-                                            String source) {
-        if (context == null || data == null || data.size() > MAX_ITEMS) {
+                                            String source, boolean sync) {
+        if (sp == null || data == null || data.size() > MAX_ITEMS) {
             return false;
         }
-        SharedPreferences sp = context.getSharedPreferences(PREFS, 0);
         String storedSession = sp.getString(PREFS_SESSION, null);
         // session 只做身份比较：不同即新会话（下面 shouldResetSession 清理旧数据），
         // 相同即同进程继续合并。不再按启动毫秒拒绝“迟到”批次：时钟回拨后新会话
@@ -238,9 +261,28 @@ public final class StatusProvider extends ContentProvider {
         boolean wrote = changed || reset || heartbeat
                 || (mainProcess && session != null && !session.isEmpty());
         if (wrote) {
-            editor.apply();
+            if (sync) {
+                // 崩溃路径：call() 返回前必须确认已经落盘。commit 失败返回 null，
+                // 让 Report 继续走文件 fsync+rename 兜底，绝不静默丢失数据。
+                if (!editor.commit()) {
+                    return null;
+                }
+            } else {
+                editor.apply();
+            }
         }
         return changed || reset;
+    }
+
+    /** Context 胶水：Provider.call 与 ReportSocketServer 共用的入口。 */
+    static synchronized Boolean applyReport(Context context, Map<String, String> data,
+                                            String session, boolean mainProcess,
+                                            String source, boolean sync) {
+        if (context == null) {
+            return false;
+        }
+        return applyReport(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE),
+                data, session, mainProcess, source, sync);
     }
 
     /**

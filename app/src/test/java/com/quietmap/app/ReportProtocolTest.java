@@ -7,6 +7,8 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
+import io.github.yigenhuobah.core.ReportProtocolCore;
+
 /**
  * StatusProvider 的纯 Java 协议规则：键白名单、值长度、hit/entry 计数最大值合并。
  * 这些规则决定跨进程写入 prefs 的边界，改动必须同步更新本测试。
@@ -23,7 +25,7 @@ public class ReportProtocolTest {
     }
 
     @Test
-    public void validKeyAcceptsAll113GeneratedKeys() {
+    public void validKeyAcceptsAll113ExplicitKeys() {
         int count = 0;
         for (Feature f : Feature.values()) {
             assertTrue(ReportProtocol.validKey(ReportProtocol.PREFIX_REG + f.key));
@@ -39,6 +41,28 @@ public class ReportProtocolTest {
         assertTrue(ReportProtocol.validKey(ReportProtocol.KEY_CRASH_2));
         count += 3;
         assertEquals(113, count);
+    }
+
+    /**
+     * 白名单用 configure(Set) 精确配置：entry. 是 QuietMap 的模块扩展，
+     * 必须放行；core 默认前缀生成会额外放行的 err.* 与 meta.* 不属于 QM
+     * 回传协议，必须继续拒绝。
+     */
+    @Test
+    public void explicitWhitelistAddsEntryButRejectsErrAndMeta() {
+        String featureKey = Feature.values()[0].key;
+        assertTrue("显式白名单必须包含 entry.*",
+                ReportProtocol.validKey(ReportProtocol.PREFIX_ENTRY + featureKey));
+        assertFalse("core 默认前缀生成会放行 err.*，QM 没有 hook 体异常计数",
+                ReportProtocol.validKey(ReportProtocolCore.PREFIX_ERR + featureKey));
+        assertFalse("meta.session 只在接收端 prefs 使用，不走回传通道",
+                ReportProtocol.validKey(ReportProtocolCore.KEY_META_SESSION));
+        assertFalse("meta.updated_at 只在接收端 prefs 使用，不走回传通道",
+                ReportProtocol.validKey(ReportProtocolCore.KEY_META_UPDATED_AT));
+        assertFalse("meta.source 不在 core 白名单内",
+                ReportProtocol.validKey(ReportProtocol.PREFS_SOURCE_KEY));
+        assertTrue(ReportProtocol.isCountKey(
+                ReportProtocol.PREFIX_ENTRY + featureKey));
     }
 
     /**

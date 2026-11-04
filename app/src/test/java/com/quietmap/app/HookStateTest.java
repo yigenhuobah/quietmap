@@ -121,6 +121,37 @@ public class HookStateTest {
     }
 
     /**
+     * DexKit 明细仍由模块保存（core 只有单条 lastFailure）：必须保持去重、
+     * 排序、精确撤销，以及「只记 DexKit 失败的功能也进入 touched()」的语义，
+     * 否则 Report.snapshot 不会上报该功能，诊断页看不到这条失败。
+     */
+    @Test
+    public void dexKitFailureIsTrackedSeparatelyTouchesFeatureAndClears() {
+        Feature f = Feature.MSG_IMAGE_TEXT;
+        HookState.clearFailures(f);
+        try {
+            HookState.markDexKitFailure(f, "DexKit b: boom");
+            HookState.markDexKitFailure(f, "DexKit a: miss");
+            HookState.markDexKitFailure(f, "DexKit a: miss");
+            HookState.markDexKitFailure(f, null);
+
+            assertEquals("明细必须去重并按字典序输出",
+                    Arrays.asList("DexKit a: miss", "DexKit b: boom"),
+                    HookState.dexKitFailures(f));
+            assertTrue("只记 DexKit 明细的功能也必须进入 touched()",
+                    HookState.touched().contains(f));
+
+            HookState.clearDexKitFailure(f, "DexKit a: miss");
+            assertEquals(Collections.singletonList("DexKit b: boom"),
+                    HookState.dexKitFailures(f));
+        } finally {
+            HookState.clearFailures(f);
+        }
+        assertTrue("clearFailures 必须清空 DexKit 明细",
+                HookState.dexKitFailures(f).isEmpty());
+    }
+
+    /**
      * 回归：clearFailures 可能在 skipReason 的 isEmpty() 与 Collections.min()
      * 之间并发清空 dexkitFailures。修复前集合报告非空、迭代器却已为空，
      * Collections.min 抛 NoSuchElementException（被 Report 的 catch 吞掉，

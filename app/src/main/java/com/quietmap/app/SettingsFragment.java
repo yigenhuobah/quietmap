@@ -20,6 +20,7 @@ import java.util.concurrent.Future;
 
 import io.github.libxposed.service.HookedTarget;
 import io.github.libxposed.service.XposedService;
+import io.github.yigenhuobah.core.ConfigPolicy;
 
 /**
  * 设置 tab：状态卡 + 异常横幅 + AD/UI/PV 分组开关 + 页脚。
@@ -176,7 +177,8 @@ public class SettingsFragment extends PreferenceFragmentCompat {
         Integer lastGeneration = mWriteGeneration.get(f.key);
         final int generation = (lastGeneration != null ? lastGeneration : 0) + 1;
         boolean scheduled = store.put(f.key, next, committed -> {
-            if (committed || host == null) {
+            // 写入已被接受，只有 commit 真正成功才能保留 UI 新值；失败必须回滚。
+            if (!ConfigPolicy.mustRollback(true, committed) || host == null) {
                 return;
             }
             host.runOnUiThread(() -> {
@@ -253,7 +255,7 @@ public class SettingsFragment extends PreferenceFragmentCompat {
         final Context app = appContext != null ? appContext : requireContext();
         final ConfigStore existing = mStore;
         final boolean rebuild = ConfigStore.needsRebuild(
-                existing != null, service == mStoreService);
+                existing != null, mStoreService, service);
         final int generation = ++mStoreGeneration;
         if (rebuild) {
             // service 刚绑定/断开或还没有 store：先置灰，后台读取完成后再按

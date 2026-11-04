@@ -103,12 +103,16 @@ dependencies {
     // XposedProvider only forwards a binder and touches no hooked-process API.
     implementation 'io.github.libxposed:service:102.0.0'
 
+    // 四模块共用的纯 JVM 核心库（Gradle 复合构建）。
+    implementation 'io.github.yigenhuobah:core:0.1.0'
+
     // UI 只在模块 App 进程用；hook 代码绝不引用这些类，所以不会影响宿主进程。
     implementation 'androidx.appcompat:appcompat:1.8.0'
     implementation 'com.google.android.material:material:1.14.0'
     implementation 'androidx.preference:preference:1.2.1'
 
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'io.github.yigenhuobah:core-test:0.1.0'
     // android.jar 里的 org.json 是抛 "Stub!" 的桩；单测需要真实实现来验证
     // rewriteNotificationPermission 的复制/改写语义（仅测试运行期使用）。
     testImplementation 'org.json:json:20240303'

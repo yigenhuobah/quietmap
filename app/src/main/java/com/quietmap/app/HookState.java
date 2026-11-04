@@ -2,62 +2,60 @@ package com.quietmap.app;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicLong;
+
+import io.github.yigenhuobah.core.HookStateCore;
 
 /**
  * 目标进程内的诊断状态：每个钩子的注册标签、命中次数、跳过原因与整体失效标记。
  *
- * 真正带细节的日志由 HookKit 打进 logcat（tag QuietMap）；这里只存计数快照，
- * 由 hooks 包的 Report 定期回传给模块 App 的 StatusProvider，供设置页诊断卡展示。
+ * <p>账本主体已迁移到 {@link HookStateCore}（String key）；本类只做
+ * {@link Feature} ↔ {@code f.key} 的薄适配，保持模块内既有静态 API 不变。
+ * 模块专属的 {@link Feature} 枚举与 DexKit 明细继续留在这里。
  *
- * 线程安全：命中可能来自任意线程（含 binder 线程），全部用并发容器。
+ * <p>DexKit 失败明细（native 初始化失败 / 查询异常 / 未命中）仍由本类单独保存：
+ * core 的 {@code HookStateCore} 只有单条 {@code lastFailure}，没有「多值、可精确
+ * 撤销」的明细槽位，直接迁移会丢掉可定位的查询/类名信息。详见 unresolved 说明。
+ *
+ * <p>线程安全：命中可能来自任意线程（含 binder 线程）；core 内部按 key 加锁，
+ * 本类的 DexKit 明细使用并发集合。
  */
 public final class HookState {
 
-    private static final ConcurrentMap<Feature, State> STATES = new ConcurrentHashMap<>();
+    /** 进程级账本；core 负责 hit/entry/installed/skip/critical 的全部计数。 */
+    private static final HookStateCore CORE = new HookStateCore();
+
+    /**
+     * DexKit 定位失败明细（native 初始化失败 / 查询异常 / 未命中）。
+     * 与 skip 分开保存：调用方随后会写更笼统的「锚定失败」，
+     * 直接覆盖 skip 会丢掉可定位的查询/类名信息。
+     */
+    private static final ConcurrentMap<Feature, Set<String>> DEXKIT_FAILURES =
+            new ConcurrentHashMap<>();
 
     private HookState() {
     }
 
-    private static final class State {
-        final Set<String> labels = ConcurrentHashMap.newKeySet();
-        /** 主锚点整体失效的原因集合；非空即表示该功能没有任何可用挂载点。 */
-        final Set<String> criticalSkips = ConcurrentHashMap.newKeySet();
-        /**
-         * DexKit 定位失败明细（native 初始化失败 / 查询异常 / 未命中）。
-         * 与 skip 分开保存：调用方随后会写更笼统的「锚定失败」，
-         * 直接覆盖 skip 会丢掉可定位的查询/类名信息。
-         */
-        final Set<String> dexkitFailures = ConcurrentHashMap.newKeySet();
-        final AtomicLong hits = new AtomicLong();
-        final AtomicLong entries = new AtomicLong();
-        volatile String skip;
-
-        void markSkip(String reason) {
-            if (reason != null) {
-                skip = reason;
+    private static Set<String> dexkitFailures(Feature f) {
+        Set<String> set = DEXKIT_FAILURES.get(f);
+        if (set == null) {
+            set = ConcurrentHashMap.newKeySet();
+            Set<String> previous = DEXKIT_FAILURES.putIfAbsent(f, set);
+            if (previous != null) {
+                set = previous;
             }
         }
-    }
-
-    private static State state(Feature f) {
-        State s = STATES.get(f);
-        if (s == null) {
-            s = new State();
-            State prev = STATES.putIfAbsent(f, s);
-            if (prev != null) {
-                s = prev;
-            }
-        }
-        return s;
+        return set;
     }
 
     public static void installed(Feature f, String label) {
-        state(f).labels.add(label);
+        // core 的 installed 同时负责按挂载点撤销失败；QuietMap 的失败键格式
+        // （「方法未找到 x」等）不会与安装 label 相同，行为与迁移前一致。
+        CORE.installed(f.key, label);
     }
 
     /**
@@ -65,7 +63,7 @@ public final class HookState {
      * 方法改名/签名变化、可选类缺失都属于这一类。
      */
     public static void markNotFound(Feature f, String reason) {
-        state(f).markSkip(reason);
+        CORE.markNotFound(f.key, reason);
     }
 
     /**
@@ -73,17 +71,12 @@ public final class HookState {
      * 再打上 critical 标记，让 ReportProtocol.featureFailed 把功能计入失败统计。
      */
     public static void markNotFoundCritical(Feature f, String reason) {
-        State s = state(f);
-        s.markSkip(reason);
-        if (reason != null) {
-            s.criticalSkips.add(reason);
-        }
+        CORE.markNotFoundCritical(f.key, reason);
     }
 
     /** 本会话是否出现过主锚点整体失效。 */
     public static boolean hasCriticalSkip(Feature f) {
-        State s = STATES.get(f);
-        return s != null && !s.criticalSkips.isEmpty();
+        return CORE.hasCriticalSkip(f.key);
     }
 
     /**
@@ -94,18 +87,21 @@ public final class HookState {
      * 既不改变调用方 skip 的主语义，也让失败在诊断页可见。
      */
     public static void markDexKitFailure(Feature f, String reason) {
-        if (reason != null) {
-            state(f).dexkitFailures.add(reason);
+        if (reason == null) {
+            return;
         }
+        // 保持迁移前语义：只记 DexKit 明细的功能也会进入 touched()，随快照上报。
+        CORE.enable(f.key);
+        dexkitFailures(f).add(reason);
     }
 
     /** 本会话该功能的 DexKit 失败明细（排序副本）；无失败返回空列表。 */
     public static List<String> dexKitFailures(Feature f) {
-        State s = STATES.get(f);
-        if (s == null) {
+        Set<String> set = DEXKIT_FAILURES.get(f);
+        if (set == null) {
             return Collections.emptyList();
         }
-        List<String> out = new ArrayList<>(s.dexkitFailures);
+        List<String> out = new ArrayList<>(set);
         Collections.sort(out);
         return out;
     }
@@ -121,9 +117,9 @@ public final class HookState {
         if (reason == null) {
             return;
         }
-        State s = STATES.get(f);
-        if (s != null) {
-            s.dexkitFailures.remove(reason);
+        Set<String> set = DEXKIT_FAILURES.get(f);
+        if (set != null) {
+            set.remove(reason);
         }
     }
 
@@ -137,17 +133,13 @@ public final class HookState {
      * 重试要么以干净状态成功，要么重新记录本轮的真实失败。
      */
     public static void clearFailures(Feature f) {
-        State s = STATES.get(f);
-        if (s != null) {
-            s.criticalSkips.clear();
-            s.dexkitFailures.clear();
-            s.skip = null;
-        }
+        CORE.clearFailures(f.key);
+        DEXKIT_FAILURES.remove(f);
     }
 
     /** 命中计数 +1，返回累加后的次数（供 HookKit 做日志采样）。 */
     public static long hit(Feature f) {
-        return state(f).hits.incrementAndGet();
+        return CORE.hit(f.key);
     }
 
     /**
@@ -156,39 +148,39 @@ public final class HookState {
      * 与 hit 独立，不影响既有诊断字段。
      */
     public static void entry(Feature f) {
-        state(f).entries.incrementAndGet();
+        CORE.entry(f.key);
     }
 
     // ---- 快照（供 Report 回传） ----
 
     public static List<Feature> touched() {
-        return new ArrayList<>(STATES.keySet());
+        Set<String> keys = new HashSet<>(CORE.touched());
+        List<Feature> out = new ArrayList<>();
+        for (Feature f : Feature.values()) {
+            if (keys.contains(f.key)) {
+                out.add(f);
+            }
+        }
+        return out;
     }
 
     /** 成功安装的挂载点数量（labels 去重后的条目数）；0 表示整体未挂载。 */
     public static int installedCount(Feature f) {
-        State s = STATES.get(f);
-        return s == null ? 0 : s.labels.size();
+        // core.installedCount 统计安装调用次数；QuietMap 的诊断语义是
+        // 「成功挂载点数量（label 去重）」，因此读 labels 大小。
+        return CORE.labels(f.key).size();
     }
 
     public static List<String> labels(Feature f) {
-        State s = STATES.get(f);
-        if (s == null) {
-            return Collections.emptyList();
-        }
-        List<String> out = new ArrayList<>(s.labels);
-        Collections.sort(out);
-        return out;
+        return CORE.labels(f.key);
     }
 
     public static long hitCount(Feature f) {
-        State s = STATES.get(f);
-        return s == null ? 0L : s.hits.get();
+        return CORE.hits(f.key);
     }
 
     public static long entryCount(Feature f) {
-        State s = STATES.get(f);
-        return s == null ? 0L : s.entries.get();
+        return CORE.entries(f.key);
     }
 
     /**
@@ -197,11 +189,7 @@ public final class HookState {
      * 无任何失败返回 null。
      */
     public static String skipReason(Feature f) {
-        State s = STATES.get(f);
-        if (s == null) {
-            return null;
-        }
-        return composeSkipReason(s.skip, s.dexkitFailures);
+        return composeSkipReason(CORE.skipReason(f.key), DEXKIT_FAILURES.get(f));
     }
 
     /**
@@ -213,6 +201,9 @@ public final class HookState {
      * 快照后所有判断都基于同一份数据，并发清空最多得到空快照。
      */
     static String composeSkipReason(String skip, Set<String> dexkitFailures) {
+        if (dexkitFailures == null) {
+            return skip;
+        }
         List<String> snapshot = new ArrayList<>(dexkitFailures);
         String dexkit = snapshot.isEmpty() ? null : Collections.min(snapshot);
         if (skip == null) {

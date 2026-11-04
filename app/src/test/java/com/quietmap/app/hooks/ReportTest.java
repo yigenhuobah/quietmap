@@ -247,6 +247,22 @@ public class ReportTest {
     }
 
     /**
+     * ALL-CRASH-01：UEH 崩溃路径调用的 {@link Report#flushNow()} 必须在
+     * JVM（无 Android 运行时）下也 fail-safe：所有通道都不可用时只返回，
+     * 绝不向外抛异常，也不长时间阻塞崩溃处理链。
+     */
+    @Test
+    public void flushNowNeverThrowsWithoutAndroidRuntime() {
+        long start = System.nanoTime();
+        Report.flushNow();
+        long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS
+                .toMillis(System.nanoTime() - start);
+
+        assertTrue("同步 flush 不得长时间阻塞 UEH，实际 " + elapsedMs + "ms",
+                elapsedMs < 2_000L);
+    }
+
+    /**
      * UEH 包装（QuietMapModule.installCrashHandler，onPackageReady 主进程分支调用）：
      * 幂等（静态 boolean 只包一次）、先记录崩溃再透传 previous；previous 的异常
      * 处理行为不被改变（透传后原样交回）。
