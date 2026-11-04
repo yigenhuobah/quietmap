@@ -5,6 +5,7 @@ import android.util.Log;
 import com.quietmap.app.Config;
 import com.quietmap.app.Feature;
 import com.quietmap.app.HookState;
+import com.quietmap.app.anchor.AnchorKeys;
 import com.quietmap.app.dexkit.DexKitLocator;
 
 import java.util.Collections;
@@ -34,6 +35,15 @@ public final class Hooks {
      */
     private static final Map<Feature, Installer> INSTALLERS;
 
+    private static final String[] NO_ANCHORS = new String[0];
+
+    /**
+     * blocked 功能（AD-03/AD-05）保留的锚点：运行时不注册 hook，但锚点仍在
+     * anchors.json 里供 check-mounts 做版本对比。这里集中引用，既让生成的
+     * AnchorKeys 常量有明确归属，也避免被当成死代码误删。
+     */
+    private static final Map<Feature, String[]> BLOCKED_ANCHORS;
+
     static {
         EnumMap<Feature, Installer> m = new EnumMap<>(Feature.class);
         m.put(Feature.SPLASH_GATE, SplashGateHooks::install);
@@ -57,6 +67,17 @@ public final class Hooks {
         m.put(Feature.NOTIFY_GUIDE, NotifyGuideHooks::install);
         m.put(Feature.MSG_CENTER, MsgCenterHooks::install);
         INSTALLERS = Collections.unmodifiableMap(m);
+
+        EnumMap<Feature, String[]> blocked = new EnumMap<>(Feature.class);
+        blocked.put(Feature.SPLASH_SHAKE, new String[]{
+                AnchorKeys.SPLASH_SHAKE_GUIDE,
+                AnchorKeys.SPLASH_SHAKE_TIP,
+                AnchorKeys.SPLASH_SHAKE_SPEED_STRICT,
+        });
+        blocked.put(Feature.BG_AFC_TAOKE, new String[]{
+                AnchorKeys.AFC_TK_REGISTER,
+        });
+        BLOCKED_ANCHORS = Collections.unmodifiableMap(blocked);
     }
 
     private Hooks() {
@@ -65,6 +86,12 @@ public final class Hooks {
     /** 已注册安装器的 Feature 集合；包内可见，供 HooksTest 校验与枚举一一对应。 */
     static java.util.Set<Feature> installerKeys() {
         return INSTALLERS.keySet();
+    }
+
+    /** blocked 功能保留的锚点 key；未登记的功能返回空数组。包内可见供测试。 */
+    static String[] blockedAnchors(Feature f) {
+        String[] retained = BLOCKED_ANCHORS.get(f);
+        return retained == null ? NO_ANCHORS : retained;
     }
 
     /**
@@ -140,7 +167,10 @@ public final class Hooks {
         for (Feature f : Feature.values()) {
             if (!shouldInstall(f, config.enabled(f))) {
                 if (f.blocked()) {
-                    module.log(Log.INFO, TAG, f.id + " blocked: " + f.blockedReason);
+                    String[] retained = blockedAnchors(f);
+                    module.log(Log.INFO, TAG, f.id + " blocked: " + f.blockedReason
+                            + (retained.length == 0 ? ""
+                            : " (anchors retained: " + String.join(",", retained) + ")"));
                 } else {
                     module.log(Log.INFO, TAG, f.id + " disabled");
                 }

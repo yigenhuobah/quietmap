@@ -1,6 +1,8 @@
 package com.quietmap.app.hooks;
 
 import com.quietmap.app.Feature;
+import com.quietmap.app.anchor.AnchorKeys;
+import com.quietmap.app.anchor.AnchorTable;
 
 import java.lang.reflect.Method;
 
@@ -9,18 +11,15 @@ import io.github.libxposed.api.XposedModule;
 /**
  * popup_clean 弹窗净化（升级提示配置 + 首页弹窗冲突队列）。
  *
- * dexsql 实测（高德 17.02.0.2010；17.01.0.2012 挂载点同构，仅实现类混淆名
- * Lcx1; → Lry1;）：
+ * 两个挂载点的完整签名由 anchors.json 提供：
  *
- * 1) UpdateHintConfigDownloader#a()V —— 升级提示配置下载（方法体含
- *    "update_hint_apk_newest_version" 等 prefs 键），不调用即不下载/刷新
- *    升级提示配置。纯配置下载，无 UI 副作用。
+ * 1) update_hint_config_download —— UpdateHintConfigDownloader 的下载入口
+ *    （方法体含 "update_hint_apk_newest_version" 等 prefs 键），不调用即不下载/
+ *    刷新升级提示配置。纯配置下载，无 UI 副作用。
  *
- * 2) IDialogConflictMgr#addToQueue(DialogConflictInfo)Z —— 接口方法，
- *    实现类是**混淆类 Lry1;**（dexsql class_interfaces 反查：唯一实现，
- *    17.01.0.2012 为 Lcx1;）。接口层 hook 无效
- *    （ART 走 itable 分派），必须挂 Lry1#addToQueue。
- *    返回 false = 不入队、不展示。
+ * 2) dialog_conflict_add_to_queue —— IDialogConflictMgr#addToQueue 的实现类
+ *    （混淆类，dexsql class_interfaces 反查唯一实现）。接口层 hook 无效
+ *    （ART 走 itable 分派），必须挂实现类。返回 false = 不入队、不展示。
  *
  * 中风险说明（实测调用点，务必保留开关回退）：
  * - addToQueue 的调用方不全是营销弹窗：GuideVideoViewController（功能引导视频）、
@@ -38,35 +37,25 @@ import io.github.libxposed.api.XposedModule;
  */
 final class PopupCleanHooks {
 
-    private static final String UPDATE_HINT =
-            "com.amap.bundle.appupgrade.config.downloader.UpdateHintConfigDownloader";
-
-    /** IDialogConflictMgr 的唯一实现类（dexsql class_interfaces 实测，混淆名；旧版 Lcx1;）。 */
-    private static final String DIALOG_CONFLICT_IMPL = "ry1";
-    private static final String DIALOG_CONFLICT_INFO =
-            "com.autonavi.bundle.amaphome.model.DialogConflictInfo";
-
     private PopupCleanHooks() {
     }
 
     static void install(XposedModule module, ClassLoader cl) {
         Feature f = Feature.POPUP_CLEAN;
         try {
-            Class<?> hint = HookKit.findClass(module, f, cl, UPDATE_HINT);
-            if (hint != null) {
-                Method a = HookKit.findMethod(module, f, hint, "a");
-                HookKit.install(module, f, "UpdateHintConfigDownloader#a", a,
-                        HookKit.skipVoid(module, f, "UpdateHintConfigDownloader#a"));
+            AnchorTable anchors = HookKit.loadAnchors(module, f, cl);
+            if (anchors == null) {
+                return;
             }
+            Method updateHint = anchors.method(AnchorKeys.UPDATE_HINT_CONFIG_DOWNLOAD);
+            HookKit.install(module, f, AnchorKeys.UPDATE_HINT_CONFIG_DOWNLOAD, updateHint,
+                    HookKit.skipVoid(module, f, AnchorKeys.UPDATE_HINT_CONFIG_DOWNLOAD));
 
-            Class<?> impl = HookKit.findClass(module, f, cl, DIALOG_CONFLICT_IMPL);
-            Class<?> info = HookKit.findClass(module, f, cl, DIALOG_CONFLICT_INFO);
-            if (impl != null && info != null) {
-                Method addToQueue = HookKit.findMethod(module, f, impl, "addToQueue", info);
-                HookKit.install(module, f, "Lry1#IDialogConflictMgr.addToQueue", addToQueue,
-                        HookKit.constBool(module, f,
-                                "Lry1#IDialogConflictMgr.addToQueue", false));
-            }
+            Method addToQueue =
+                    anchors.methodForCandidates(AnchorKeys.DIALOG_CONFLICT_ADD_TO_QUEUE);
+            HookKit.install(module, f, AnchorKeys.DIALOG_CONFLICT_ADD_TO_QUEUE, addToQueue,
+                    HookKit.constBool(module, f, AnchorKeys.DIALOG_CONFLICT_ADD_TO_QUEUE,
+                            false));
         } catch (Throwable t) {
             HookKit.error(module, f.id + " install aborted", t);
         }

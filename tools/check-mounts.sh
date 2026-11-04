@@ -2,8 +2,8 @@
 # 挂载点体检：高德升级后跑这个，30 秒内知道 22 项功能（20 可用 + 2 blocked）的挂载点还活着几个。
 #
 # 用法（Git Bash / Linux / macOS）：
-#   bash tools/check-mounts.sh [APK路径] [--apk APK] [--dexsql PATH] [--aapt2 PATH]
-#                               [--cache-dir DIR] [--allow-sig] [--allow-gone]
+#   bash tools/check-mounts.sh [APK路径] [--apk APK] [--anchors JSON] [--dexsql PATH]
+#                               [--aapt2 PATH] [--cache-dir DIR] [--allow-sig] [--allow-gone]
 #
 # 例：
 #   bash tools/check-mounts.sh
@@ -14,15 +14,16 @@
 # 退出码：
 #   0 = 全部 OK，或 SIG/GONE 全部被 --allow-sig / --allow-gone 显式放行
 #   1 = 存在未放行的 SIG 或 GONE（升级回归，需要重新定位）
-#   2 = 参数/输入错误（APK/dexsql 缺失等）
+#   2 = 参数/输入错误（APK/dexsql/anchors.json 缺失或格式错误等）
 #   3 = dexsql 查询失败
 #
 # 参数优先级: CLI > 环境变量 > 常见安装路径。
 # 环境变量:
-#   TARGET_APK, DEXSQL, AAPT2（旧变量 APK 仍作为 TARGET_APK 的别名）
+#   TARGET_APK, ANCHORS_JSON, DEXSQL, AAPT2（旧变量 APK 仍作为 TARGET_APK 的别名）
 #
 # 依赖:
 #   - dexsql（必需）：--dexsql / DEXSQL / PATH / tools/dexsql/ 等常见位置
+#   - python3/python（必需）：读取并校验 app/src/main/resources/anchors.json
 #   - aapt2 或 aapt（可选）：--aapt2 / AAPT2 / PATH / Android SDK build-tools；
 #     缺失时只跳过 versionName 校验
 #   - 目标 APK（必需）：--apk / TARGET_APK / 当前目录或 ~/Downloads 下的 base*.apk
@@ -34,19 +35,18 @@
 # 判定规则：
 #   OK   = 类和方法都在，且方法完整签名没变，hook 大概还能挂上
 #   GONE = 类不存在了（R8/升级改了名），需要重新定位
-#   SIG  = 类还在但方法签名变了（改名 / 参数变化），看差异再决定
+#   SIG  = 类还在但方法签名/锚点字符串变了（改名 / 参数变化），看差异再决定
 #
-# 挂载点清单（共 63 条）与 app/src/main/java/com/quietmap/app/hooks/ 下的常量一一对应，
-# 完整签名取自 dexsql 对高德 17.02.0.2010 的实测（17.01.0.2012 → 17.02.0.2010
-# 重定位 12 条，混淆名旧→新：Lze5→Lah5、Llt1→Lev1、Ln55→Lp75、La8→Ln8、
-# Lcx1→Lry1、Le72→Lo82、Lso2→Lpp2、Lxf2→Lzg2）。
+# 挂载点清单（共 63 条）唯一来源是 app/src/main/resources/anchors.json：
+# 每项含 c/m/s/feature/critical/note，混淆类另有 candidates（类名快路径）与
+# dexkit（DexKit 方法体字符串）。运行时 hook 通过 AnchorTable/AnchorKeys 读取
+# 同一张表，check-mounts 只读表，不再维护第二份清单。
+# anchors.json 必须由 tools/gen_anchors.py 生成（顶层 generatedBy 校验），
+# 避免手改表绕过 c/m/s 与版本校验。
 # AD-03（splash_shake）与 AD-05（bg_afc_taoke）虽为 blocked、运行时不注册 hook，
 # 仍保留条目用于版本对比；这两项的 OK 只代表类/方法还在，不代表功能可用。
-# 混淆类挂载点（Lah5#attemptRequestData、Ln8#run、Lec0#dispatch）另有方法体
-# 字符串锚点监控：签名在但锚点串丢了也判 SIG（运行时 DexKit 按锚点定位会失败）。
-# Ln8 的锚点监控与运行时 Anchors.java 保持一致：两条字符串必须同时命中。
-# Lec0 的锚点监控与运行时 H5InstallApkHooks.DISPATCH_ANCHORS 保持一致：
-# 三条字符串必须同时命中。
+# 任一带 dexkit 字段的条目：签名在但任一锚点串丢了也判 SIG（运行时 DexKit
+# 按锚点定位会失败）。
 
 set -u
 
@@ -55,6 +55,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CACHE_ROOT="$REPO_ROOT/tools/.dexsql-cache"
 
 TARGET_APK="${TARGET_APK:-${APK:-}}"
+ANCHORS_JSON="${ANCHORS_JSON:-$REPO_ROOT/app/src/main/resources/anchors.json}"
 DEXSQL="${DEXSQL:-}"
 AAPT2="${AAPT2:-}"
 CACHE_DIR=""
@@ -65,11 +66,12 @@ ALLOW_GONE=0
 usage() {
   cat <<'EOF'
 Usage:
-  tools/check-mounts.sh [APK_PATH] [--apk APK] [--dexsql PATH] [--aapt2 PATH]
-                        [--cache-dir DIR] [--allow-sig] [--allow-gone]
+  tools/check-mounts.sh [APK_PATH] [--apk APK] [--anchors JSON] [--dexsql PATH]
+                        [--aapt2 PATH] [--cache-dir DIR] [--allow-sig] [--allow-gone]
 
 Arguments:
   APK_PATH / --apk   目标 APK（高德）；也可用 TARGET_APK 环境变量
+  --anchors JSON    锚点表；默认 app/src/main/resources/anchors.json
   --dexsql PATH      dexsql 可执行文件；也可用 DEXSQL
   --aapt2 PATH       aapt2/aapt 可执行文件；也可用 AAPT2（缺失时跳过 versionName 校验）
   --cache-dir DIR    DexSQL 缓存目录；默认 <repo>/tools/.dexsql-cache/<sha256前16位>/
@@ -90,6 +92,11 @@ while [ $# -gt 0 ]; do
       TARGET_APK="$2"; shift 2 ;;
     --apk=*)
       TARGET_APK="${1#*=}"; shift ;;
+    --anchors)
+      [ $# -ge 2 ] || { echo "ERROR: --anchors needs a value" >&2; exit 2; }
+      ANCHORS_JSON="$2"; shift 2 ;;
+    --anchors=*)
+      ANCHORS_JSON="${1#*=}"; shift ;;
     --dexsql)
       [ $# -ge 2 ] || { echo "ERROR: --dexsql needs a value" >&2; exit 2; }
       DEXSQL="$2"; shift 2 ;;
@@ -185,6 +192,15 @@ find_aapt() {
   return 1
 }
 
+# Windows Python 不认 Git Bash 的 /d/... 路径：有 cygpath 时转成原生路径。
+to_native_path() {
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w -- "$1" 2>/dev/null || printf '%s' "$1"
+  else
+    printf '%s' "$1"
+  fi
+}
+
 # ---- APK 定位 -------------------------------------------------------------
 # 位置参数也是 CLI，优先级高于环境变量。
 if [ -n "$POSITIONAL" ]; then
@@ -253,6 +269,175 @@ if [ -n "$AAPT2" ] && ! is_executable_file "$AAPT2" \
   echo "WARN: aapt2/aapt is not executable: $AAPT2; skipping versionName assertion" >&2
   echo "      Fix: pass --aapt2 /path/to/aapt2, export AAPT2=..., or set ANDROID_HOME/ANDROID_SDK_ROOT." >&2
   AAPT2=""
+fi
+
+# ---- 锚点表读取：唯一来源 app/src/main/resources/anchors.json -------------
+if [ -z "${PYTHON:-}" ]; then
+  if command -v python >/dev/null 2>&1; then
+    PYTHON="python"
+  elif command -v python3 >/dev/null 2>&1; then
+    PYTHON="python3"
+  else
+    echo "ERROR: python not found" >&2
+    echo "  Fix: install Python 3 or set PYTHON=/path/to/python." >&2
+    exit 2
+  fi
+fi
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+  echo "ERROR: python not found: $PYTHON" >&2
+  echo "  Fix: install Python 3 or set PYTHON=/path/to/python." >&2
+  exit 2
+fi
+case "$ANCHORS_JSON" in
+  /*|[A-Za-z]:[\\/]*) ;;
+  *) ANCHORS_JSON="$PWD/$ANCHORS_JSON" ;;
+esac
+if [ ! -f "$ANCHORS_JSON" ]; then
+  echo "ERROR: anchors.json not found: $ANCHORS_JSON" >&2
+  echo "  Fix: pass --anchors /path/to/anchors.json." >&2
+  exit 2
+fi
+ANCHORS_NATIVE="$(to_native_path "$ANCHORS_JSON")"
+
+MOUNTS_TSV=""
+cleanup() {
+  [ -n "$MOUNTS_TSV" ] && rm -f "$MOUNTS_TSV"
+}
+trap cleanup EXIT
+
+MOUNTS_TSV=$(mktemp "${TMPDIR:-/tmp}/qm-anchors-XXXXXX") || {
+  echo "ERROR: cannot create temporary file (mktemp)" >&2
+  exit 2
+}
+
+if ! "$PYTHON" -I - "$ANCHORS_NATIVE" > "$MOUNTS_TSV" <<'PY'
+import json
+import re
+import sys
+
+# Windows Python 默认用本地代码页（如 cp936）且把 \n 写成 \r\n：
+# 统一成 UTF-8（dexsql 按 UTF-8 解释 SQL）与 LF，避免中文锚点串被转码。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", newline="\n")
+
+path = sys.argv[1]
+
+
+def no_duplicates(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("重复键：%s" % key)
+        result[key] = value
+    return result
+
+
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle, object_pairs_hook=no_duplicates)
+except (OSError, ValueError) as exc:
+    print("anchors.json 无法解析：%s" % exc, file=sys.stderr)
+    raise SystemExit(2)
+
+errors = []
+
+
+def err(message):
+    errors.append(message)
+
+
+if not isinstance(payload, dict):
+    err("顶层不是对象")
+    payload = {}
+
+if payload.get("schemaVersion") != 1:
+    err("schemaVersion 必须为 1")
+app_version = payload.get("appVersion")
+version_code = payload.get("versionCode")
+generated_by = payload.get("generatedBy")
+if not isinstance(app_version, str) or not app_version.strip():
+    err("appVersion 缺失或不是非空字符串")
+if isinstance(version_code, bool) or not isinstance(version_code, int) or version_code <= 0:
+    err("versionCode 缺失或不是正整数")
+if generated_by != "tools/gen_anchors.py":
+    err("generatedBy 不是 tools/gen_anchors.py：%r" % generated_by)
+classes = payload.get("classes")
+if not isinstance(classes, dict):
+    err("classes 缺失或不是对象")
+anchors = payload.get("anchors")
+if not isinstance(anchors, dict):
+    err("anchors 缺失或不是对象")
+    anchors = {}
+if len(anchors) != 63:
+    err("挂载点必须保持 63 项，实际 %d 项" % len(anchors))
+
+seen = set()
+rows = []
+feature_pattern = re.compile(r"^(AD|UI|PV|EN|EX)-[0-9]+$")
+for key, entry in anchors.items():
+    if not isinstance(key, str) or not key:
+        err("锚点 key 非法：%r" % (key,))
+        continue
+    if not isinstance(entry, dict):
+        err("锚点 %s 不是对象" % key)
+        continue
+    for field in ("c", "m", "s", "feature", "note"):
+        value = entry.get(field)
+        if not isinstance(value, str) or not value:
+            err("锚点 %s 缺少必填字段 %s" % (key, field))
+    if not isinstance(entry.get("critical"), bool):
+        err("锚点 %s 的 critical 不是布尔值" % key)
+    feature = entry.get("feature")
+    if isinstance(feature, str) and feature and not feature_pattern.match(feature):
+        err("锚点 %s 的 feature 不是统一功能编号：%r" % (key, feature))
+    for field in ("candidates", "dexkit"):
+        if field in entry:
+            value = entry.get(field)
+            if not isinstance(value, list) or not value \
+                    or any(not isinstance(item, str) or not item for item in value):
+                err("锚点 %s 的 %s 必须是非空字符串数组" % (key, field))
+    c, m, s = entry.get("c"), entry.get("m"), entry.get("s")
+    if not (isinstance(c, str) and isinstance(m, str) and isinstance(s, str)):
+        continue
+    if not s.startswith("("):
+        err("锚点 %s 不是方法锚点（s 必须以 '(' 开头）：%r" % (key, s))
+        continue
+    descriptor = "L%s;->%s%s" % (c.replace(".", "/"), m, s)
+    if descriptor in seen:
+        err("重复方法描述符：%s" % descriptor)
+    seen.add(descriptor)
+    dexkit = entry.get("dexkit") or []
+    note = str(entry.get("note") or "").replace("\t", " ").replace("\n", " ")
+    rows.append((key, descriptor, str(entry.get("feature") or ""),
+                 "true" if entry.get("critical") else "false", note,
+                 "\x1f".join(dexkit)))
+
+if errors:
+    for message in errors:
+        print("anchors.json: %s" % message, file=sys.stderr)
+    raise SystemExit(2)
+
+print("META\t%s\t%s\t%d" % (app_version, version_code, len(rows)))
+for row in rows:
+    print("\t".join(row))
+PY
+then
+  echo "ERROR: invalid anchors.json: $ANCHORS_JSON" >&2
+  exit 2
+fi
+
+IFS=$'\t' read -r META_TAG TABLE_VERSION TABLE_CODE ANCHOR_COUNT < "$MOUNTS_TSV" || {
+  echo "ERROR: anchors.json 读取失败（缺少 META）: $ANCHORS_JSON" >&2
+  exit 2
+}
+# 兼容 Windows Python 可能残留的 CR（sys.stdout.reconfigure 已处理，双保险）。
+META_TAG="${META_TAG%$'\r'}"
+TABLE_VERSION="${TABLE_VERSION%$'\r'}"
+TABLE_CODE="${TABLE_CODE%$'\r'}"
+ANCHOR_COUNT="${ANCHOR_COUNT%$'\r'}"
+if [ "$META_TAG" != "META" ]; then
+  echo "ERROR: anchors.json 读取失败（META 格式错误）: $ANCHORS_JSON" >&2
+  exit 2
 fi
 
 # ---- 缓存定位 -------------------------------------------------------------
@@ -373,88 +558,18 @@ count() {
   printf '%s\n' "$n"
 }
 
-# 挂载点清单：完整方法描述符|功能
-# 完整描述符 = 类描述符 + ";->" + 方法名 + 参数/返回值 JNI 签名，与 dexsql 的
-# methods.descriptor 列同构，直接全等比对即可判 SIG。
-#
-# 批 3（首页营销三件套）说明：
-# - sendList 批 2 经验的多重载全挂：2 参 + 3 参两条都列。
-# - getMessages 批 3 dexsql 复核发现是**三个**重载（任务清单原写 1 个），三条全列。
-# - IDeliveryDisplay#start 挂实现类 Lev1（接口层 hook 无效，ART 走 itable 分派；
-#   17.01.0.2012 为 Llt1），Lev1 是混淆类，与 Lah5 同样需要「类名变更监控」——这里只查签名，
-#   运行时定位失败由 fail-open 记 skip；类名变了查 class_interfaces 反查新实现类。
-# - AjxModuleBadge 是 AbstractModuleBadge（抽象类）的唯一子类，
-#   updateAppBadge/setBadgeDisplay 的实体实现都在它上面（smali 实测）。
-MOUNTS='Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager;->getMessageInBackground(Landroid/app/Activity;Z)V|bg_msg_fetch 后台拉取营销消息
-Lcom/autonavi/minimap/bundle/msgbox/push/BackgroundMsgScreenReceiver;->onReceive(Landroid/content/Context;Landroid/content/Intent;)V|bg_msg_fetch 亮屏触发源
-Lcom/autonavi/minimap/awaken/AwakenRequestHolder;->sendAwakenPage(Lcom/autonavi/minimap/awaken/param/AwakenPageRequest;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V|bg_awaken_report 唤端上报(2参)
-Lcom/autonavi/minimap/awaken/AwakenRequestHolder;->sendAwakenPage(Lcom/autonavi/minimap/awaken/param/AwakenPageRequest;Lcom/autonavi/minimap/falcon/base/a;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V|bg_awaken_report 唤端上报(3参补充)
-Lcom/taobao/flowcustoms/afc/taoke/AfcTkManager;->registerTkFlag(Landroid/content/Context;)V|bg_afc_taoke 淘宝客SDK注册
-Lcom/ta/audid/upload/UtdidUploadTask;->upload()V|bg_utdid_upload 指纹上传
-Lcom/ta/audid/upload/UtdidUploadTask;->uploadFromCache()V|bg_utdid_upload 指纹缓存上传
-Lcom/ta/audid/upload/UtdidUploadTask;->reqServer(Ljava/lang/String;)Z|bg_utdid_upload 服务端交换
-Lec0;->dispatch(Landroid/content/Intent;)Z|h5_install_apk 推广APK下载分发(混淆类,字符串锚定"checkappupdate"+"Dispatch App Upgrade"+"appDownloadfail",SIG监控)
-Lcom/amap/bundle/appupgrade/AppUpgradeController;->q(Lcom/amap/bundle/appupgrade/e;ZZ)Z|popup_upgrade 升级弹窗
-Lcom/autonavi/bundle/amaphome/impl/BootBizDataPreloaderImpl;->canShowSplash()Ljava/lang/Boolean;|splash_gate 开屏闸门(返回Boolean.FALSE走NO_SPLASH分支)
-Lcom/autonavi/minimap/impl/SplashScreenServiceImpl;->tryShowSplashView(ILjava/lang/String;)V|splash_gate 展示层兜底(不调用)
-Lcom/autonavi/minimap/alimama/AlimamaRequestHolder;->sendSplashScreen(Lcom/autonavi/minimap/alimama/param/SplashScreenRequest;Lcom/autonavi/minimap/falcon/base/a;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V|splash_request 开屏广告请求(3参,dexsql实测falcon包名)
-Lcom/autonavi/minimap/alimama/AlimamaRequestHolder;->sendSplashScreen(Lcom/autonavi/minimap/alimama/param/SplashScreenRequest;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V|splash_request 开屏广告请求(2参重载)
-Lah5;->attemptRequestData(IZ)V|splash_request 开屏广告请求调度(混淆类,字符串锚定"不发送请求",SIG监控)
-Lcom/autonavi/minimap/entity/SplashButtonInfo;->getShakeGuide()Ljava/lang/String;|splash_shake 摇一摇引导清空
-Lcom/autonavi/minimap/entity/SplashButtonInfo;->getShakeTip()Ljava/lang/String;|splash_shake 摇一摇提示清空
-Lcom/autonavi/minimap/entity/SplashButtonInfo;->isSpeedStrict()Z|splash_shake 摇一摇速度严格关
-Lcom/autonavi/minimap/banner/BannerRequestHolder;->sendList(Lcom/autonavi/minimap/banner/param/BannerListRequest;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V|home_banner Banner拉取(2参重载)
-Lcom/autonavi/minimap/banner/BannerRequestHolder;->sendList(Lcom/autonavi/minimap/banner/param/BannerListRequest;Lcom/autonavi/minimap/falcon/base/a;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V|home_banner Banner拉取(3参重载)
-Lcom/autonavi/bundle/banner/manager/BannerManager;->b(Ljava/lang/String;ZZLcom/autonavi/bundle/banner/manager/OnLoadBannerListener;)V|home_banner 运营位Banner加载
-Lcom/autonavi/bundle/uitemplate/mapwidget/widget/activity/OperateActivityMapWidget;->refreshSplashBar(Lcom/autonavi/minimap/bundle/msgbox/entity/AmapMessage;Ljava/lang/String;Ljava/lang/String;Lcom/autonavi/minimap/bundle/msgbox/listener/ActivityEventCallback;)V|home_operate_bar 首页运营活动条
-Lcom/autonavi/bundle/uitemplate/mapwidget/widget/msgtip/MsgTipMapWidget;->showTips(Lcom/autonavi/minimap/bundle/msgbox/entity/AmapMessage;I)Z|home_operate_bar 地图消息气泡(return false)
-Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager;->getMessages(Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager$GetMessageListener;ZLzg2;)V|home_msg_filter 消息拉取(2参重载)
-Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager;->getMessages(Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager$GetMessageListener;ZZLzg2;)V|home_msg_filter 消息拉取(3参重载)
-Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager;->getMessages(Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager$GetMessageListener;ZZLzg2;Ljava/lang/String;)V|home_msg_filter 消息拉取(4参重载)
-Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager;->retrieveRemoteMessages(Ljava/util/Set;Ljava/lang/String;)V|home_msg_filter 远程营销消息拉取
-Lev1;->start(Landroid/app/Activity;Lcom/autonavi/minimap/bundle/msgbox/entity/AmapMessage;)V|home_msg_filter 主图投放(接口IDeliveryDisplay实现类,混淆类)
-Lcom/amap/bundle/badgesystem/ajxmodule/AjxModuleBadge;->updateAppBadge(Ljava/lang/String;I)V|home_msg_filter 角标红点更新
-Lcom/amap/bundle/badgesystem/ajxmodule/AjxModuleBadge;->setBadgeDisplay(Ljava/lang/String;Z)V|home_msg_filter 角标显示(不调用)
-Lcom/autonavi/jni/badgesystem/BadgeSystemManager;->updateAppBadge(Ljava/lang/String;I)V|home_msg_filter 启动器角标
-Lcom/autonavi/bundle/amaphome/components/searchbar/BaseSearchBar;->requestPreSetWord(ZLjava/lang/String;)V|search_hotword 搜索框热词请求(唯一重载)
-Lcom/autonavi/bundle/uitemplate/preset/PreSetWordManager;->d(Lp75;)V|search_hotword 热词本地计数
-Lcom/autonavi/bundle/amaphome/components/searchbar/BaseSearchBar;->uploadPreSetWordTracker(Lp75;)V|search_hotword 热词天擎曝光上报(17.02从PreSetWordManager#e挪到BaseSearchBar)
-Lcom/autonavi/bundle/uitemplate/ajx/ModuleSlideContainer;->responsePreSetWords(Ljava/lang/String;)V|search_hotword AJX热词回填(第二道保险)
-Lcom/autonavi/minimap/alimama/AlimamaRequestHolder;->sendH5Log(Lcom/autonavi/minimap/alimama/param/H5LogRequest;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V|h5_ad_log H5广告监测(2参重载)
-Lcom/autonavi/minimap/alimama/AlimamaRequestHolder;->sendH5Log(Lcom/autonavi/minimap/alimama/param/H5LogRequest;Lcom/autonavi/minimap/falcon/base/a;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V|h5_ad_log H5广告监测(3参重载)
-Lcom/autonavi/minimap/basemap/floatinglayer/FloatingLayerManager;->a(Ljava/lang/String;Ljava/lang/String;Lorg/json/JSONObject;Lcom/autonavi/minimap/basemap/floatinglayer/FloatingLayerManager$b;)Ljava/lang/String;|map_float_layer 运营浮层注册(返回"")
-Ln8;->run()V|msg_image_text 图文素材下载任务(混淆类,字符串锚定,SIG监控)
-Lcom/amap/bundle/appupgrade/config/downloader/UpdateHintConfigDownloader;->a()V|popup_clean 升级提示配置下载
-Lry1;->addToQueue(Lcom/autonavi/bundle/amaphome/model/DialogConflictInfo;)Z|popup_clean 首页弹窗冲突队列(接口实现类,混淆类)
-Lcom/autonavi/minimap/track/b;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lcom/autonavi/minimap/entity/SplashButtonInfo;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Lo82;ZLjava/lang/String;)V|track_suppress 开屏曝光埋点
-Lcom/autonavi/minimap/track/b;->f(Ljava/lang/String;Ljava/lang/String;Ljava/util/ArrayList;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Lcom/autonavi/minimap/entity/SplashButtonInfo;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;ILjava/lang/String;Lo82;ZLjava/lang/String;)V|track_suppress 开屏埋点聚合+三方监测
-Lcom/autonavi/minimap/track/SplashLogManager;->a(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V|track_suppress 开屏日志上传
-Lcom/ut/mini/UTTracker;->send(Ljava/util/Map;)V|track_suppress UT统计总出口
-Lcom/ut/mini/UTTracker;->sendLog(Ljava/util/Map;ILjava/util/List;)V|track_suppress UT落盘/转发入口
-Lcom/alipay/mobile/nebulacore/plugin/H5ShakePlugin;->handleEvent(Lcom/alipay/mobile/h5container/api/H5Event;Lcom/alipay/mobile/h5container/api/H5BridgeContext;)Z|shake_h5 H5摇一摇(只拦watchShake)
-Lcom/alipay/mobile/aompdevice/shake/h5plugin/H5SensorPlugin;->registerGyroscopeListener(Lcom/alipay/mobile/h5container/api/H5Event;)Z|shake_h5 H5陀螺仪注册
-Lcom/autonavi/nebulax/extensions/point/AMapAppStartShakePoint;->onInitialized()V|shake_h5 小程序摇一摇初始化
-Lcom/autonavi/nebulax/utils/SensorManagerHelper;->onSensorChanged(Landroid/hardware/SensorEvent;)V|shake_h5 摇一摇监听回调
-Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager;->handlePush(Ljava/lang/String;)V|bg_msg_fetch 推送消息处理入口
-Lcom/autonavi/minimap/bundle/msgbox/push/BackgroundMsgManager;->a(Lcom/autonavi/minimap/bundle/msgbox/push/IBackgroundMsgFetchListener;)V|bg_msg_fetch 后台营销消息拉取
-Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager;->fetchMessageFromMainMap(IZLcom/autonavi/minimap/bundle/msgbox/api/IMsgboxService$MainMapUIUpdater;)V|bg_msg_fetch 主图消息拉取包装
-Lcom/amap/bundle/cloudconfig/appinit/AppInitServiceImpl;->getOperationModuleSwitch(Z)Z|ops_activity 运营活动模块开关(return false)
-Lcom/autonavi/minimap/bundle/activities/ActivitiesService;->openOpetationsActivities(Lcom/autonavi/map/fragmentcontainer/page/AbstractBasePage;Ljava/lang/String;Ljava/lang/String;)V|ops_activity 活动打开入口(3参)
-Lcom/autonavi/minimap/bundle/activities/ActivitiesService;->openOpetationsActivities(Lcom/autonavi/map/fragmentcontainer/page/AbstractBasePage;Ljava/lang/String;Ljava/lang/String;Z)V|ops_activity 活动打开入口(4参重载)
-Lcom/alipay/android/phone/mobilesdk/permission/guide/PermissionGuideFloatShow;->showNotificationGuide(Lcom/alipay/android/phone/mobilesdk/permission/guide/PermissionGuideRequest;)V|notify_guide 通知权限底部浮条(不展示)
-Lcom/alipay/android/phone/mobilesdk/permission/guide/sys/SysPermissionGuideFloatMode;->showFloatWithSysCore()V|notify_guide 系统浮条(仅通知权限跳过)
-Lpp2;->i(Landroid/app/Activity;Lorg/json/JSONObject;Ljava/lang/String;)V|notify_guide 权限请求参数桥(permissionType改写)
-Lcom/amap/bundle/badgesystem/ajxmodule/AjxModuleBadge;->getAllSessionList(ZLcom/autonavi/minimap/ajx3/core/JsFunctionCallback;)V|msg_center AJX会话列表清空(回调{"convList":[]})
-Lcom/amap/bundle/badgesystem/ajxmodule/AjxModuleBadge;->getBadgeInfo(Ljava/lang/String;)Ljava/lang/String;|msg_center 消息Tab角标归零({"value":0})
-Lcom/autonavi/minimap/ajx3/modules/internalmodules/AjxModuleLocalStorage;->getItemSync(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;|msg_center 最近消息缓存清空(message_tab/recentlyMsgList-*)
-Lcom/autonavi/minimap/ajx3/modules/internalmodules/AjxModuleLocalStorage;->setItemSync(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)Z|msg_center 最近消息缓存写入拦截'
+# 锚点字符串进 SQL LIKE：转义单引号，避免表里出现引号时拼接出错。
+sql_like_value() {
+  printf '%s' "$1" | sed "s/'/''/g"
+}
 
 echo
 echo "APK: $TARGET_APK"
 echo "APK 指纹: size=$APK_SIZE mtime=${APK_MTIME:-unknown} sha256(前16位)=$APK_SHA"
+echo "锚点表: $ANCHORS_JSON（$ANCHOR_COUNT 项, appVersion $TABLE_VERSION / versionCode $TABLE_CODE）"
 echo "缓存: $CACHE"
-# ── 版本校验：与清单实测版本比对，只警告不中断 ────────────────────
-EXPECTED_VERSION="17.02.0.2010"
+# ── 版本校验：与锚点表实测版本比对，只警告不中断 ────────────────────
+EXPECTED_VERSION="$TABLE_VERSION"
 VERSION_NAME=""
 if [ -n "$AAPT2" ]; then
   VERSION_NAME=$("$AAPT2" dump badging "$TARGET_APK" 2>/dev/null | sed -n "s/.*versionName='\([^']*\)'.*/\1/p" | head -1)
@@ -462,7 +577,7 @@ if [ -n "$AAPT2" ]; then
   if [ "$VERSION_NAME" != "$EXPECTED_VERSION" ]; then
     echo
     echo "*********************** WARN ***********************"
-    echo "  versionName=${VERSION_NAME:-未知}，与挂载点实测版本 $EXPECTED_VERSION 不一致！"
+    echo "  versionName=${VERSION_NAME:-未知}，与锚点表实测版本 $EXPECTED_VERSION 不一致！"
     echo "  方法签名/锚点可能已变，下面的 OK 结果仅供参考。"
     echo "****************************************************"
     echo
@@ -478,72 +593,61 @@ printf '%.0s-' {1..120}; echo
 ok=0
 sig=0
 gone=0
-while IFS='|' read -r full feat; do
+while IFS=$'\t' read -r key full feat critical note dexkit; do
+  [ "$key" = "META" ] && continue
   [ -z "$full" ] && continue
+  note="${note%$'\r'}"
+  dexkit="${dexkit%$'\r'}"
   # 完整描述符 = "<类描述符含尾分号>-><方法签名>"; 从 "->" 处劈开，
   # 注意不能用 ";->"：那个分号是类描述符自带的，劈掉就查不到类了。
   cls="${full%%->*}"
   cls_hit=$(count "SELECT count(*) FROM classes WHERE descriptor='$cls'") || exit 3
   if [ "${cls_hit:-0}" = "0" ]; then
-    printf '%-8s %-78s %s\n' "GONE" "${full#*->}" "$feat"
+    printf '%-8s %-78s %s\n' "GONE" "${full#*->}" "$feat $note"
     gone=$((gone + 1))
     continue
   fi
   mth_hit=$(count "SELECT count(*) FROM methods WHERE descriptor='$full'") || exit 3
   if [ "${mth_hit:-0}" = "0" ]; then
-    printf '%-8s %-78s %s\n' "SIG" "${full#*->}  (类在、签名变了)" "$feat"
+    printf '%-8s %-78s %s\n' "SIG" "${full#*->}  (类在、签名变了)" "$feat $note"
     sig=$((sig + 1))
     continue
   fi
-  # 混淆类字符串锚定 SIG 监控：签名在但方法体锚点丢了，运行时 DexKit 会定位失败
+  # 混淆类字符串锚定 SIG 监控：签名在但方法体锚点丢了，运行时 DexKit 会定位失败。
+  # dexkit 数组是 AND 语义，全部命中才判 OK（与运行时 addUsingString 一致）。
   anchor_note=""
-  case "$full" in
-    'Lah5;->attemptRequestData(IZ)V')
-      anchor_hit=$(count "SELECT count(*) FROM method_strings WHERE method='$full' AND value LIKE '%不发送请求%'") || exit 3
+  if [ -n "$dexkit" ]; then
+    anchor_broken=0
+    IFS=$'\x1f' read -r -a dex_anchors <<< "$dexkit"
+    for anchor in "${dex_anchors[@]}"; do
+      [ -z "$anchor" ] && continue
+      anchor_escaped="$(sql_like_value "$anchor")"
+      anchor_hit=$(count "SELECT count(*) FROM method_strings WHERE method='$full' AND value LIKE '%$anchor_escaped%'") || exit 3
       if [ "${anchor_hit:-0}" = "0" ]; then
-        printf '%-8s %-78s %s\n' "SIG" "${full#*->}  (锚点字符串丢失,需换锚)" "$feat"
-        sig=$((sig + 1))
-        continue
+        anchor_broken=1
+        break
       fi
-      anchor_note=" [锚点OK]"
-      ;;
-    'Ln8;->run()V')
-      # 与运行时 Anchors.java 对齐：DexKit 的 addUsingString 是 AND 语义，
-      # "invalid download item: "（含尾空格）与 "ImageTextMessageDownloader"
-      # 两条必须同时命中；只查其中一条会把运行时挂不上的情况误判成 OK。
-      anchor_hit=$(count "SELECT count(*) FROM method_strings WHERE method='$full' AND value LIKE '%invalid download item: %'") || exit 3
-      anchor_cls_hit=$(count "SELECT count(*) FROM method_strings WHERE method='$full' AND value LIKE '%ImageTextMessageDownloader%'") || exit 3
-      if [ "${anchor_hit:-0}" = "0" ] || [ "${anchor_cls_hit:-0}" = "0" ]; then
-        printf '%-8s %-78s %s\n' "SIG" "${full#*->}  (与运行时锚点不一致,需核对 Anchors.java)" "$feat"
-        sig=$((sig + 1))
-        continue
-      fi
-      anchor_note=" [锚点OK]"
-      ;;
-    'Lec0;->dispatch(Landroid/content/Intent;)Z')
-      # 与运行时 H5InstallApkHooks.DISPATCH_ANCHORS 对齐：三条字符串交集在全 APK
-      # 内唯一命中本方法（17.02.0.2010 实测），全部命中才判 OK。
-      anchor_action=$(count "SELECT count(*) FROM method_strings WHERE method='$full' AND value LIKE '%action.autonavi.checkappupdate%'") || exit 3
-      anchor_log=$(count "SELECT count(*) FROM method_strings WHERE method='$full' AND value LIKE '%Dispatch App Upgrade%'") || exit 3
-      anchor_fail=$(count "SELECT count(*) FROM method_strings WHERE method='$full' AND value LIKE '%appDownloadfail%'") || exit 3
-      if [ "${anchor_action:-0}" = "0" ] || [ "${anchor_log:-0}" = "0" ] \
-        || [ "${anchor_fail:-0}" = "0" ]; then
-        printf '%-8s %-78s %s\n' "SIG" "${full#*->}  (与运行时锚点不一致,需核对 H5InstallApkHooks)" "$feat"
-        sig=$((sig + 1))
-        continue
-      fi
-      anchor_note=" [锚点OK]"
-      ;;
-  esac
-  printf '%-8s %-78s %s\n' "OK" "${full#*->}$anchor_note" "$feat"
+    done
+    if [ "$anchor_broken" -eq 1 ]; then
+      printf '%-8s %-78s %s\n' "SIG" "${full#*->}  (锚点字符串丢失,需换锚)" "$feat $note"
+      sig=$((sig + 1))
+      continue
+    fi
+    anchor_note=" [锚点OK]"
+  fi
+  printf '%-8s %-78s %s\n' "OK" "${full#*->}$anchor_note" "$feat $note"
   ok=$((ok + 1))
-done <<EOF
-$MOUNTS
-EOF
+done < "$MOUNTS_TSV"
 
 total=$((ok + sig + gone))
+if [ "$total" -ne "$ANCHOR_COUNT" ]; then
+  echo "ERROR: 校验项数 $total 与锚点表 $ANCHOR_COUNT 项不一致" >&2
+  exit 3
+fi
+
 echo
 echo "签名校验: 完整描述符（方法名 + 参数 + 返回类型），无仅名称条目"
+echo "锚点校验: anchors.json 的 dexkit 字符串（AND 语义），带该字段的条目全部命中才判 OK"
 echo "汇总: 共 $total 项 — OK $ok / SIG $sig / GONE $gone"
 if [ "$sig" -eq 0 ] && [ "$gone" -eq 0 ]; then
   echo "二十二钩子挂载点全部存活。"

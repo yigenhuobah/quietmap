@@ -393,6 +393,7 @@ public final class Report {
         }
         try {
             Class<?> at = Class.forName("android.app.ActivityThread");
+            // anchor-allowlist: Android 框架引导反射（非宿主挂载点），用于兜底取 Application Context
             Object app = at.getMethod("currentApplication").invoke(null);
             if (app instanceof Context) {
                 sContext = (Context) app;

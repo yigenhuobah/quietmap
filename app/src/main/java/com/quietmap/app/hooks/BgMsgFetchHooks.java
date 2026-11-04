@@ -1,10 +1,8 @@
 package com.quietmap.app.hooks;
 
-import android.app.Activity;
-import android.content.Context;
-import android.content.Intent;
-
 import com.quietmap.app.Feature;
+import com.quietmap.app.anchor.AnchorKeys;
+import com.quietmap.app.anchor.AnchorTable;
 
 import java.lang.reflect.Method;
 
@@ -13,7 +11,7 @@ import io.github.libxposed.api.XposedModule;
 /**
  * bg_msg_fetch 后台消息拉取净化。
  *
- * 五个挂载点，同一个开关（批 5 在原有两个之上补挂三个）：
+ * 五个挂载点，同一个开关，全部由 anchors.json 提供 c/m/s：
  * 1) MessageBoxManager#getMessageInBackground(Activity, boolean) —— 亮屏时后台拉取营销消息，
  *    不调用即断「拉取」；
  * 2) BackgroundMsgScreenReceiver#onReceive(Context, Intent) —— 亮屏广播触发源，
@@ -37,75 +35,39 @@ import io.github.libxposed.api.XposedModule;
  */
 final class BgMsgFetchHooks {
 
-    private static final String MANAGER = "com.autonavi.minimap.bundle.msgbox.util.MessageBoxManager";
-    private static final String RECEIVER = "com.autonavi.minimap.bundle.msgbox.push.BackgroundMsgScreenReceiver";
-    private static final String BG_MSG_MANAGER =
-            "com.autonavi.minimap.bundle.msgbox.push.BackgroundMsgManager";
-    private static final String BG_FETCH_LISTENER =
-            "com.autonavi.minimap.bundle.msgbox.push.IBackgroundMsgFetchListener";
-    private static final String MAIN_MAP_UPDATER =
-            "com.autonavi.minimap.bundle.msgbox.api.IMsgboxService$MainMapUIUpdater";
-
     private BgMsgFetchHooks() {
     }
 
     static void install(XposedModule module, ClassLoader cl) {
         Feature f = Feature.BG_MSG_FETCH;
         try {
-            Class<?> manager = HookKit.findClass(module, f, cl, MANAGER);
-            Method getMessageInBackground = HookKit.findMethod(module, f, manager,
-                    "getMessageInBackground", Activity.class, boolean.class);
-            HookKit.install(module, f, "MessageBoxManager#getMessageInBackground",
-                    getMessageInBackground,
-                    HookKit.skipVoid(module, f, "MessageBoxManager#getMessageInBackground"));
-
-            Class<?> receiver = HookKit.findClass(module, f, cl, RECEIVER);
-            if (receiver != null) {
-                Method onReceive = HookKit.findMethod(module, f, receiver,
-                        "onReceive", Context.class, Intent.class);
-                HookKit.install(module, f, "BackgroundMsgScreenReceiver#onReceive",
-                        onReceive,
-                        HookKit.skipVoid(module, f, "BackgroundMsgScreenReceiver#onReceive"));
+            AnchorTable anchors = HookKit.loadAnchors(module, f, cl);
+            if (anchors == null) {
+                return;
             }
 
-            installHandlePush(module, f, cl, manager);
-            installBackgroundFetch(module, f, cl);
-            installFetchFromMainMap(module, f, cl, manager);
+            Method getMessageInBackground = anchors.method(AnchorKeys.MSG_FETCH_IN_BACKGROUND);
+            HookKit.install(module, f, AnchorKeys.MSG_FETCH_IN_BACKGROUND,
+                    getMessageInBackground,
+                    HookKit.skipVoid(module, f, AnchorKeys.MSG_FETCH_IN_BACKGROUND));
+
+            Method onReceive = anchors.method(AnchorKeys.BG_MSG_SCREEN_RECEIVER);
+            HookKit.install(module, f, AnchorKeys.BG_MSG_SCREEN_RECEIVER, onReceive,
+                    HookKit.skipVoid(module, f, AnchorKeys.BG_MSG_SCREEN_RECEIVER));
+
+            Method handlePush = anchors.method(AnchorKeys.MSG_HANDLE_PUSH);
+            HookKit.install(module, f, AnchorKeys.MSG_HANDLE_PUSH, handlePush,
+                    HookKit.skipVoid(module, f, AnchorKeys.MSG_HANDLE_PUSH));
+
+            Method backgroundFetch = anchors.method(AnchorKeys.BG_MSG_MANAGER_FETCH);
+            HookKit.install(module, f, AnchorKeys.BG_MSG_MANAGER_FETCH, backgroundFetch,
+                    HookKit.skipVoid(module, f, AnchorKeys.BG_MSG_MANAGER_FETCH));
+
+            Method fetchFromMainMap = anchors.method(AnchorKeys.MSG_FETCH_FROM_MAIN_MAP);
+            HookKit.install(module, f, AnchorKeys.MSG_FETCH_FROM_MAIN_MAP, fetchFromMainMap,
+                    HookKit.skipVoid(module, f, AnchorKeys.MSG_FETCH_FROM_MAIN_MAP));
         } catch (Throwable t) {
             HookKit.error(module, f.id + " install aborted", t);
         }
-    }
-
-    /** 推送消息处理入口：不解析、不写 PUSH_MSG、不触发按 id 拉取。 */
-    private static void installHandlePush(XposedModule module, Feature f, ClassLoader cl,
-                                          Class<?> manager) {
-        Method handlePush = HookKit.findMethod(module, f, manager, "handlePush", String.class);
-        HookKit.install(module, f, "MessageBoxManager#handlePush", handlePush,
-                HookKit.skipVoid(module, f, "MessageBoxManager#handlePush"));
-    }
-
-    /** 后台营销消息网络拉取：BackgroundMsgManager#a(listener) 不调用。 */
-    private static void installBackgroundFetch(XposedModule module, Feature f, ClassLoader cl) {
-        Class<?> bg = HookKit.findClass(module, f, cl, BG_MSG_MANAGER);
-        Class<?> listener = HookKit.findClass(module, f, cl, BG_FETCH_LISTENER);
-        if (bg == null || listener == null) {
-            return;
-        }
-        Method a = HookKit.findMethod(module, f, bg, "a", listener);
-        HookKit.install(module, f, "BackgroundMsgManager#a", a,
-                HookKit.skipVoid(module, f, "BackgroundMsgManager#a"));
-    }
-
-    /** 主图消息拉取包装：内部转 getMessages，单独断一道。 */
-    private static void installFetchFromMainMap(XposedModule module, Feature f, ClassLoader cl,
-                                                Class<?> manager) {
-        Class<?> updater = HookKit.findClass(module, f, cl, MAIN_MAP_UPDATER);
-        if (manager == null || updater == null) {
-            return;
-        }
-        Method fetch = HookKit.findMethod(module, f, manager, "fetchMessageFromMainMap",
-                int.class, boolean.class, updater);
-        HookKit.install(module, f, "MessageBoxManager#fetchMessageFromMainMap", fetch,
-                HookKit.skipVoid(module, f, "MessageBoxManager#fetchMessageFromMainMap"));
     }
 }

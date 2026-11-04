@@ -2,6 +2,8 @@ package com.quietmap.app.hooks;
 
 import com.quietmap.app.Feature;
 import com.quietmap.app.HookState;
+import com.quietmap.app.anchor.AnchorKeys;
+import com.quietmap.app.anchor.AnchorTable;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -18,7 +20,8 @@ import io.github.libxposed.api.XposedModule;
  * Lxf2; → Lzg2;、实现类 Llt1; → Lev1;）挂载点：
  *
  * 1) MessageBoxManager#getMessages —— **三个重载全挂**（dexsql 实测 3 条签名，
- *    任务清单只列了 1 条，以实测为准）：
+ *    任务清单只列了 1 条，以实测为准），由 anchors.json 的
+ *    msg_get_messages_2p / 3p / 4p 给出完整描述符：
  *      (GetMessageListener, boolean, zg2)
  *      (GetMessageListener, boolean, boolean, zg2)
  *      (GetMessageListener, boolean, boolean, zg2, String)
@@ -30,30 +33,29 @@ import io.github.libxposed.api.XposedModule;
  *    再跳过业务体」，调用方立即收到「无消息」结果并结束等待态。
  *    listener 为 null 或回调反射失败时 fail-open 放行原方法。
  *
- * 2) MessageBoxManager#retrieveRemoteMessages(Set, String) —— 远程营销消息拉取。
- *    单独挂：getMessages 内部也会调它，双保险断远程源。
+ * 2) MessageBoxManager#retrieveRemoteMessages(Set, String) —— 远程营销消息拉取
+ *    （锚点 msg_retrieve_remote）。单独挂：getMessages 内部也会调它，双保险断远程源。
  *    **本地已缓存消息由 getAllLocalMessages 走 DB，不受本钩子影响**，
  *    这是「不误杀真实消息」的关键设计（见类注释的取舍说明）。
  *
  * 3) IDeliveryDisplay#start 的实现类 —— 接口是
  *    Lcom/autonavi/minimap/bundle/msgbox/mainmap/IDeliveryDisplay;（纯接口，
- *    hook 接口方法无效），实际实现类是混淆类 Lev1;（dexsql class_interfaces
- *    反查：17.02.0.2010 下唯一实现类，旧版本为 Llt1;）。
- *    故必须挂 Lev1;->start(Activity, AmapMessage)。
+ *    hook 接口方法无效），实际实现类是混淆类（锚点 delivery_display_start，
+ *    17.02 为 Lev1;，旧版本为 Llt1;）。故必须挂实现类的
+ *    start(Activity, AmapMessage)。
  *
  * 4) 角标红点桥接：AbstractModuleBadge 是抽象类（access_flags=1025），
- *    唯一子类 Lcom/amap/bundle/badgesystem/ajxmodule/AjxModuleBadge; 覆写了
- *    updateAppBadge(String,int) 与 setBadgeDisplay(String,boolean) 且有实体
- *    实现体（smali 实测）。该桥按 bizId 共享（17.02 实证 BUS id 至少有
+ *    唯一子类 覆写了 updateAppBadge(String,int) 与 setBadgeDisplay(String,boolean)
+ *    且有实体实现体（smali 实测）。该桥按 bizId 共享（17.02 实证 BUS id 至少有
  *    taxi_tab/mine/messagetab/nearby_tab），必须按 bizId 门控，只处理
  *    messagetab（与 MsgCenterHooks#getBadgeInfo 的门控同源），否则其它业务的
- *    角标会被一并抑制。故挂 AjxModuleBadge 的两个方法：
+ *    角标会被一并抑制。故挂两个方法（badge_update_app / badge_set_display）：
  *      updateAppBadge   → bizId=messagetab 且 count > 0 时不调用；其余放行
  *      setBadgeDisplay  → bizId=messagetab 时不调用（广播不发出）；其余放行
  *    但首页消息盒路径 MapHomeMsgDispatchServiceImpl.updateBadgeInternal 走
- *    接口 IBadgeSystemService->updateAppBadge，实际实现在
- *    Lcom/autonavi/jni/badgesystem/BadgeSystemManager;->updateAppBadge(String,int)
- *    （dexsql 实证，返回 V），故额外挂 BadgeSystemManager 的同名方法：
+ *    接口 IBadgeSystemService->updateAppBadge，实际实现在 JNI 实现类
+ *    （锚点 launcher_badge_update_app，dexsql 实证返回 V），故额外挂
+ *    BadgeSystemManager 的同名方法：
  *      updateAppBadge   → bizId=messagetab 且 count > 0 时不调用；其余放行
  *
  * 取舍说明（白名单式）：
@@ -73,60 +75,47 @@ import io.github.libxposed.api.XposedModule;
  */
 final class HomeMsgFilterHooks {
 
-    private static final String MESSAGE_BOX_MANAGER =
-            "com.autonavi.minimap.bundle.msgbox.util.MessageBoxManager";
-    private static final String GET_MESSAGE_LISTENER =
-            "com.autonavi.minimap.bundle.msgbox.util.MessageBoxManager$GetMessageListener";
-    /** getMessages 的第三个参数类型，dexsql 描述符 Lzg2;（包内混淆接口/类，旧版 Lxf2;）。 */
-    private static final String MSG_FILTER_PARAM = "zg2";
-
-    /** IDeliveryDisplay 的实际实现类（dexsql class_interfaces 实测，旧版 Llt1;）。 */
-    private static final String DELIVERY_DISPLAY_IMPL = "ev1";
-    private static final String AMAP_MESSAGE =
-            "com.autonavi.minimap.bundle.msgbox.entity.AmapMessage";
-
-    /** 角标桥接：AbstractModuleBadge 是抽象类，实现类在 badgesystem 包（非混淆）。 */
-    private static final String AJX_MODULE_BADGE =
-            "com.amap.bundle.badgesystem.ajxmodule.AjxModuleBadge";
-
-    /** 消息盒角标路径的实际实现类：IBadgeSystemService 的 JNI 实现（dexsql 实证）。 */
-    private static final String BADGE_SYSTEM_MANAGER =
-            "com.autonavi.jni.badgesystem.BadgeSystemManager";
-
     private HomeMsgFilterHooks() {
     }
 
     static void install(XposedModule module, ClassLoader cl) {
         Feature f = Feature.HOME_MSG_FILTER;
         try {
-            installGetMessages(module, f, cl);
-            installRetrieveRemoteMessages(module, f, cl);
-            installDeliveryDisplay(module, f, cl);
-            installBadge(module, f, cl);
+            AnchorTable anchors = HookKit.loadAnchors(module, f, cl);
+            if (anchors == null) {
+                return;
+            }
+            installGetMessages(module, f, anchors);
+            installRetrieveRemoteMessages(module, f, anchors);
+            installDeliveryDisplay(module, f, anchors);
+            installBadge(module, f, anchors);
         } catch (Throwable t) {
             HookKit.error(module, f.id + " install aborted", t);
         }
     }
 
     /**
-     * getMessages 三个重载全挂。参数类型 GetMessageListener / zg2 需先从目标
-     * ClassLoader 加载才能反射拿 Method；任一类型缺失则整组跳过（避免挂半套）。
+     * getMessages 三个重载全挂。参数类型（GetMessageListener / 混淆参数类）由锚点
+     * 描述符解析得到，任一描述符解析失败只影响对应重载。
      *
      * 三个重载都带 GetMessageListener 回调契约，不能用 skipVoid 整段跳过——
      * 那会让调用方（唯一真实入口 ModuleMessageBox#hasNewMessage）永远等不到
-     * onFinish。这里先解析 onFinish(List,List,boolean,boolean)，解析失败则
-     * 整组不挂（fail-open，挂了也无法完成回调契约）；解析成功后挂
+     * onFinish。这里从解析到的方法参数类型反射找 onFinish(List,List,boolean,boolean)，
+     * 找不到则整组不挂（fail-open，挂了也无法完成回调契约）；找到后挂
      * 「回调空结果再跳过业务体」的 Hooker。
      */
-    private static void installGetMessages(XposedModule module, Feature f, ClassLoader cl) {
-        Class<?> manager = HookKit.findClass(module, f, cl, MESSAGE_BOX_MANAGER);
-        Class<?> listener = HookKit.findClass(module, f, cl, GET_MESSAGE_LISTENER);
-        Class<?> filterParam = HookKit.findClass(module, f, cl, MSG_FILTER_PARAM);
-        if (manager == null || listener == null || filterParam == null) {
+    private static void installGetMessages(XposedModule module, Feature f,
+                                           AnchorTable anchors) {
+        Method m2 = anchors.method(AnchorKeys.MSG_GET_MESSAGES_2P);
+        Method m3 = anchors.method(AnchorKeys.MSG_GET_MESSAGES_3P);
+        Method m4 = anchors.method(AnchorKeys.MSG_GET_MESSAGES_4P);
+        Method sample = m2 != null ? m2 : (m3 != null ? m3 : m4);
+        if (sample == null) {
+            HookState.markNotFound(f, "getMessages 锚点不可用");
             return;
         }
-        Method onFinish = HookKit.findMethodQuiet(listener, "onFinish",
-                List.class, List.class, boolean.class, boolean.class);
+        Class<?> listener = sample.getParameterTypes()[0];
+        Method onFinish = findListenerFinish(listener);
         if (onFinish == null) {
             HookKit.warn(module, f.id
                     + " skip: GetMessageListener#onFinish(List,List,Z,Z) not found");
@@ -135,78 +124,72 @@ final class HomeMsgFilterHooks {
         }
         setAccessibleQuiet(module, f, onFinish);
 
-        // 2 参：(GetMessageListener, boolean, zg2)
-        Method m2 = HookKit.findMethod(module, f, manager,
-                "getMessages", listener, boolean.class, filterParam);
-        HookKit.install(module, f, "MessageBoxManager#getMessages(2p)", m2,
-                finishListenerThenSkip(module, f, "MessageBoxManager#getMessages(2p)", onFinish));
+        HookKit.install(module, f, AnchorKeys.MSG_GET_MESSAGES_2P, m2,
+                finishListenerThenSkip(module, f, AnchorKeys.MSG_GET_MESSAGES_2P, onFinish));
+        HookKit.install(module, f, AnchorKeys.MSG_GET_MESSAGES_3P, m3,
+                finishListenerThenSkip(module, f, AnchorKeys.MSG_GET_MESSAGES_3P, onFinish));
+        HookKit.install(module, f, AnchorKeys.MSG_GET_MESSAGES_4P, m4,
+                finishListenerThenSkip(module, f, AnchorKeys.MSG_GET_MESSAGES_4P, onFinish));
+    }
 
-        // 3 参：(GetMessageListener, boolean, boolean, zg2)
-        Method m3 = HookKit.findMethod(module, f, manager,
-                "getMessages", listener, boolean.class, boolean.class, filterParam);
-        HookKit.install(module, f, "MessageBoxManager#getMessages(3p)", m3,
-                finishListenerThenSkip(module, f, "MessageBoxManager#getMessages(3p)", onFinish));
-
-        // 4 参：(GetMessageListener, boolean, boolean, zg2, String)
-        Method m4 = HookKit.findMethod(module, f, manager,
-                "getMessages", listener, boolean.class, boolean.class, filterParam, String.class);
-        HookKit.install(module, f, "MessageBoxManager#getMessages(4p)", m4,
-                finishListenerThenSkip(module, f, "MessageBoxManager#getMessages(4p)", onFinish));
+    /**
+     * 在监听器接口上找「无消息」完成回调：参数形状固定为
+     * (List, List, boolean, boolean)。按形状匹配而不硬编码方法名，接口方法
+     * 改名/换包只要形状不变仍能命中。
+     */
+    static Method findListenerFinish(Class<?> listener) {
+        if (listener == null) {
+            return null;
+        }
+        for (Method method : listener.getMethods()) {
+            Class<?>[] params = method.getParameterTypes();
+            if (params.length == 4
+                    && params[0] == List.class
+                    && params[1] == List.class
+                    && params[2] == boolean.class
+                    && params[3] == boolean.class) {
+                return method;
+            }
+        }
+        return null;
     }
 
     /** 远程营销消息拉取，断源（本地缓存走 DB 不受影响）。 */
-    private static void installRetrieveRemoteMessages(XposedModule module, Feature f, ClassLoader cl) {
-        Class<?> manager = HookKit.findClass(module, f, cl, MESSAGE_BOX_MANAGER);
-        if (manager == null) {
-            return;
-        }
-        Method retrieveRemote = HookKit.findMethod(module, f, manager,
-                "retrieveRemoteMessages", java.util.Set.class, String.class);
-        HookKit.install(module, f, "MessageBoxManager#retrieveRemoteMessages", retrieveRemote,
-                HookKit.skipVoid(module, f, "MessageBoxManager#retrieveRemoteMessages"));
+    private static void installRetrieveRemoteMessages(XposedModule module, Feature f,
+                                                      AnchorTable anchors) {
+        Method retrieveRemote = anchors.method(AnchorKeys.MSG_RETRIEVE_REMOTE);
+        HookKit.install(module, f, AnchorKeys.MSG_RETRIEVE_REMOTE, retrieveRemote,
+                HookKit.skipVoid(module, f, AnchorKeys.MSG_RETRIEVE_REMOTE));
     }
 
     /**
      * 主图投放展示：接口 IDeliveryDisplay 不能 hook（接口方法无实现体，
-     * 挂上也不会被调用——ART 走 itable 分派到实现类方法），必须挂实现类 Lev1。
+     * 挂上也不会被调用——ART 走 itable 分派到实现类方法），必须挂实现类。
+     * 混淆类名与完整签名由 anchors.json 的 delivery_display_start 提供。
      */
-    private static void installDeliveryDisplay(XposedModule module, Feature f, ClassLoader cl) {
-        Class<?> impl = HookKit.findClass(module, f, cl, DELIVERY_DISPLAY_IMPL);
-        Class<?> message = HookKit.findClass(module, f, cl, AMAP_MESSAGE);
-        if (impl == null || message == null) {
-            return;
-        }
-        Method start = HookKit.findMethod(module, f, impl,
-                "start", android.app.Activity.class, message);
-        HookKit.install(module, f, "Lev1#IDeliveryDisplay.start", start,
-                HookKit.skipVoid(module, f, "Lev1#IDeliveryDisplay.start"));
+    private static void installDeliveryDisplay(XposedModule module, Feature f,
+                                               AnchorTable anchors) {
+        Method start = anchors.methodForCandidates(AnchorKeys.DELIVERY_DISPLAY_START);
+        HookKit.install(module, f, AnchorKeys.DELIVERY_DISPLAY_START, start,
+                HookKit.skipVoid(module, f, AnchorKeys.DELIVERY_DISPLAY_START));
     }
 
     /** 角标红点：messagetab 的 updateAppBadge(count>0) 与 setBadgeDisplay 不调用。 */
-    private static void installBadge(XposedModule module, Feature f, ClassLoader cl) {
-        Class<?> badge = HookKit.findClass(module, f, cl, AJX_MODULE_BADGE);
-        if (badge != null) {
-            Method updateAppBadge = HookKit.findMethod(module, f, badge,
-                    "updateAppBadge", String.class, int.class);
-            HookKit.install(module, f, "AjxModuleBadge#updateAppBadge", updateAppBadge,
-                    suppressPositiveBadgeCount(module, f, "AjxModuleBadge#updateAppBadge"));
+    private static void installBadge(XposedModule module, Feature f, AnchorTable anchors) {
+        Method updateAppBadge = anchors.method(AnchorKeys.BADGE_UPDATE_APP);
+        HookKit.install(module, f, AnchorKeys.BADGE_UPDATE_APP, updateAppBadge,
+                suppressPositiveBadgeCount(module, f, AnchorKeys.BADGE_UPDATE_APP));
 
-            Method setBadgeDisplay = HookKit.findMethod(module, f, badge,
-                    "setBadgeDisplay", String.class, boolean.class);
-            HookKit.install(module, f, "AjxModuleBadge#setBadgeDisplay", setBadgeDisplay,
-                    skipMessageTabBadgeDisplay(module, f, "AjxModuleBadge#setBadgeDisplay"));
-        }
+        Method setBadgeDisplay = anchors.method(AnchorKeys.BADGE_SET_DISPLAY);
+        HookKit.install(module, f, AnchorKeys.BADGE_SET_DISPLAY, setBadgeDisplay,
+                skipMessageTabBadgeDisplay(module, f, AnchorKeys.BADGE_SET_DISPLAY));
 
         // 消息盒路径 MapHomeMsgDispatchServiceImpl.updateBadgeInternal 经
-        // IBadgeSystemService 分派到该 JNI 实现类，与 AjxModuleBadge 互不依赖。
-        Class<?> badgeSystem = HookKit.findClass(module, f, cl, BADGE_SYSTEM_MANAGER);
-        if (badgeSystem == null) {
-            return;
-        }
-        Method jniUpdateAppBadge = HookKit.findMethod(module, f, badgeSystem,
-                "updateAppBadge", String.class, int.class);
-        HookKit.install(module, f, "BadgeSystemManager#updateAppBadge", jniUpdateAppBadge,
-                suppressPositiveBadgeCount(module, f, "BadgeSystemManager#updateAppBadge"));
+        // IBadgeSystemService 分派到 JNI 实现类，与 AJX 角标桥互不依赖。
+        Method jniUpdateAppBadge = anchors.method(AnchorKeys.LAUNCHER_BADGE_UPDATE_APP);
+        HookKit.install(module, f, AnchorKeys.LAUNCHER_BADGE_UPDATE_APP, jniUpdateAppBadge,
+                suppressPositiveBadgeCount(module, f,
+                        AnchorKeys.LAUNCHER_BADGE_UPDATE_APP));
     }
 
     /**

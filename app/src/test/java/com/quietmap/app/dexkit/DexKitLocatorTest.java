@@ -34,6 +34,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class DexKitLocatorTest {
 
+    /** 与 anchors.json 的 dexkit 字段一致；表值由 AnchorContractTest 锁定。 */
+    private static final String SPLASH_ANCHOR = "不发送请求";
+    private static final String IMAGE_TEXT_DL = "invalid download item: ";
+    private static final String IMAGE_TEXT_DL_CLASS = "ImageTextMessageDownloader";
+
     @Test
     public void anchorKeyFiltersBlankEntriesAndKeepsOrder() {
         assertEquals("a\u0001b", DexKitLocator.anchorKey("a", null, "", "b"));
@@ -59,33 +64,33 @@ public class DexKitLocatorTest {
     @Test
     public void missCacheKeyIsStableForIdenticalQueries() {
         String k1 = DexKitLocator.missCacheKey(null, "attemptRequestData", void.class,
-                new Class<?>[]{int.class, boolean.class}, Anchors.STR_SPLASH_REQ_NO_SEND);
+                new Class<?>[]{int.class, boolean.class}, SPLASH_ANCHOR);
         String k2 = DexKitLocator.missCacheKey(null, "attemptRequestData", void.class,
-                new Class<?>[]{int.class, boolean.class}, Anchors.STR_SPLASH_REQ_NO_SEND);
+                new Class<?>[]{int.class, boolean.class}, SPLASH_ANCHOR);
         assertEquals("同一查询必须得到同一 key", k1, k2);
     }
 
     @Test
     public void missCacheKeySeparatesDifferentQueryIdentities() {
         String base = DexKitLocator.missCacheKey(null, "run", void.class,
-                new Class<?>[0], Anchors.STR_IMAGE_TEXT_DL, Anchors.STR_IMAGE_TEXT_DL_CLASS);
+                new Class<?>[0], IMAGE_TEXT_DL, IMAGE_TEXT_DL_CLASS);
 
         assertNotEquals("类名 hint 必须进 key（同 anchor 集合可被不同目标复用）",
                 base, DexKitLocator.missCacheKey("n8", "run", void.class,
-                        new Class<?>[0], Anchors.STR_IMAGE_TEXT_DL, Anchors.STR_IMAGE_TEXT_DL_CLASS));
+                        new Class<?>[0], IMAGE_TEXT_DL, IMAGE_TEXT_DL_CLASS));
         assertNotEquals("方法名必须进 key",
                 base, DexKitLocator.missCacheKey(null, "attemptRequestData", void.class,
-                        new Class<?>[0], Anchors.STR_IMAGE_TEXT_DL, Anchors.STR_IMAGE_TEXT_DL_CLASS));
+                        new Class<?>[0], IMAGE_TEXT_DL, IMAGE_TEXT_DL_CLASS));
         assertNotEquals("返回类型必须进 key",
                 base, DexKitLocator.missCacheKey(null, "run", int.class,
-                        new Class<?>[0], Anchors.STR_IMAGE_TEXT_DL, Anchors.STR_IMAGE_TEXT_DL_CLASS));
+                        new Class<?>[0], IMAGE_TEXT_DL, IMAGE_TEXT_DL_CLASS));
         assertNotEquals("参数类型必须进 key",
                 base, DexKitLocator.missCacheKey(null, "run", void.class,
                         new Class<?>[]{int.class},
-                        Anchors.STR_IMAGE_TEXT_DL, Anchors.STR_IMAGE_TEXT_DL_CLASS));
+                        IMAGE_TEXT_DL, IMAGE_TEXT_DL_CLASS));
         assertNotEquals("anchor 集合必须进 key",
                 base, DexKitLocator.missCacheKey(null, "run", void.class,
-                        new Class<?>[0], Anchors.STR_IMAGE_TEXT_DL));
+                        new Class<?>[0], IMAGE_TEXT_DL));
     }
 
     @Test
@@ -126,10 +131,10 @@ public class DexKitLocatorTest {
     @Test
     public void queryLabelKeepsClassMethodSignatureAndAnchorsForWarnings() {
         assertEquals("Lah5#attemptRequestData(int,boolean):void [anchors="
-                        + Anchors.STR_SPLASH_REQ_NO_SEND + "]",
+                        + SPLASH_ANCHOR + "]",
                 DexKitLocator.queryLabel("Lah5", "attemptRequestData",
                         void.class, new Class<?>[]{int.class, boolean.class},
-                        Anchors.STR_SPLASH_REQ_NO_SEND));
+                        SPLASH_ANCHOR));
         assertEquals("run():void", DexKitLocator.queryLabel(null, "run", void.class,
                 new Class<?>[0]));
         assertEquals("[anchors=only-anchor]",
@@ -149,15 +154,15 @@ public class DexKitLocatorTest {
     @Test
     public void queryLabelSeparatesSameClassMethodWithDifferentSignaturesAndAnchors() {
         String base = DexKitLocator.queryLabel("Lah5", "attemptRequestData", void.class,
-                new Class<?>[]{int.class}, Anchors.STR_SPLASH_REQ_NO_SEND);
+                new Class<?>[]{int.class}, SPLASH_ANCHOR);
 
         assertNotEquals("返回类型必须进查询身份",
                 base, DexKitLocator.queryLabel("Lah5", "attemptRequestData", boolean.class,
-                        new Class<?>[]{int.class}, Anchors.STR_SPLASH_REQ_NO_SEND));
+                        new Class<?>[]{int.class}, SPLASH_ANCHOR));
         assertNotEquals("参数类型必须进查询身份",
                 base, DexKitLocator.queryLabel("Lah5", "attemptRequestData", void.class,
                         new Class<?>[]{int.class, boolean.class},
-                        Anchors.STR_SPLASH_REQ_NO_SEND));
+                        SPLASH_ANCHOR));
         assertNotEquals("anchor 集合必须进查询身份",
                 base, DexKitLocator.queryLabel("Lah5", "attemptRequestData", void.class,
                         new Class<?>[]{int.class}, "another-anchor"));
@@ -177,10 +182,10 @@ public class DexKitLocatorTest {
         HookState.clearFailures(f);
         try {
             String queryVoid = DexKitLocator.queryLabel("Lah5", "attemptRequestData",
-                    void.class, new Class<?>[]{int.class}, Anchors.STR_SPLASH_REQ_NO_SEND);
+                    void.class, new Class<?>[]{int.class}, SPLASH_ANCHOR);
             String queryBoolean = DexKitLocator.queryLabel("Lah5", "attemptRequestData",
                     boolean.class, new Class<?>[]{int.class},
-                    Anchors.STR_SPLASH_REQ_NO_SEND);
+                    SPLASH_ANCHOR);
             assertNotEquals("同 class#method 不同签名必须得到不同查询身份",
                     queryVoid, queryBoolean);
 
@@ -194,7 +199,7 @@ public class DexKitLocatorTest {
             AtomicInteger calls = new AtomicInteger();
             Method found = DexKitLocator.findMethodAttempts(
                     f, queryBoolean, "Lah5", "attemptRequestData",
-                    new String[]{Anchors.STR_SPLASH_REQ_NO_SEND},
+                    new String[]{SPLASH_ANCHOR},
                     q -> {
                         if (calls.incrementAndGet() == 1) {
                             throw new IllegalStateException("boom");

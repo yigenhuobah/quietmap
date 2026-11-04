@@ -8,6 +8,8 @@ import android.util.Log;
 
 import com.quietmap.app.Feature;
 import com.quietmap.app.HookState;
+import com.quietmap.app.anchor.AnchorKeys;
+import com.quietmap.app.anchor.AnchorTable;
 
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -58,16 +60,6 @@ import io.github.libxposed.api.XposedModule;
  */
 final class NotifyGuideHooks {
 
-    private static final String FLOAT_SHOW =
-            "com.alipay.android.phone.mobilesdk.permission.guide.PermissionGuideFloatShow";
-    private static final String FLOAT_REQUEST =
-            "com.alipay.android.phone.mobilesdk.permission.guide.PermissionGuideRequest";
-    private static final String SYS_FLOAT_MODE =
-            "com.alipay.android.phone.mobilesdk.permission.guide.sys.SysPermissionGuideFloatMode";
-    private static final String SYS_GUIDE_MODE =
-            "com.alipay.android.phone.mobilesdk.permission.guide.sys.SysPermissionGuideMode";
-
-    private static final String PERMISSION_BRIDGE = "pp2";
     private static final String FIELD_PERM_TYPE = "permissionType";
     private static final String PROXY_PERMISSION_TYPE = "location";
     private static final String FIELD_PERMISSION = "guidePermissionStr";
@@ -95,58 +87,52 @@ final class NotifyGuideHooks {
     static void install(XposedModule module, ClassLoader cl) {
         Feature f = Feature.NOTIFY_GUIDE;
         try {
-            installBottomFloat(module, f, cl);
-            installSysFloat(module, f, cl);
-            installPermissionBridge(module, f, cl);
+            AnchorTable anchors = HookKit.loadAnchors(module, f, cl);
+            if (anchors == null) {
+                return;
+            }
+            installBottomFloat(module, f, anchors);
+            installSysFloat(module, f, anchors);
+            installPermissionBridge(module, f, anchors);
         } catch (Throwable t) {
             HookKit.error(module, f.id + " install aborted", t);
         }
     }
 
     /** 底部通知权限浮条：不展示。 */
-    private static void installBottomFloat(XposedModule module, Feature f, ClassLoader cl) {
-        Class<?> show = HookKit.findClass(module, f, cl, FLOAT_SHOW);
-        Class<?> request = HookKit.findClass(module, f, cl, FLOAT_REQUEST);
-        if (show == null || request == null) {
-            return;
-        }
-        Method guide = HookKit.findMethod(module, f, show,
-                "showNotificationGuide", request);
+    private static void installBottomFloat(XposedModule module, Feature f,
+                                           AnchorTable anchors) {
+        Method guide = anchors.method(AnchorKeys.NOTIFY_GUIDE_SHOW);
         setAccessibleQuiet(guide);
-        HookKit.install(module, f, "PermissionGuideFloatShow#showNotificationGuide", guide,
-                skipVoidLogged(module, f,
-                        "PermissionGuideFloatShow#showNotificationGuide"));
+        HookKit.install(module, f, AnchorKeys.NOTIFY_GUIDE_SHOW, guide,
+                skipVoidLogged(module, f, AnchorKeys.NOTIFY_GUIDE_SHOW));
     }
 
     /** 系统浮条：只在通知权限引导时跳过，其余权限原样放行。 */
-    private static void installSysFloat(XposedModule module, Feature f, ClassLoader cl) {
-        Class<?> mode = HookKit.findClass(module, f, cl, SYS_FLOAT_MODE);
-        Class<?> base = HookKit.findClass(module, f, cl, SYS_GUIDE_MODE);
-        if (mode == null || base == null) {
-            return;
-        }
-        Field permission = fieldQuiet(base, FIELD_PERMISSION);
-        Field permissionList = fieldQuiet(base, FIELD_PERMISSION_LIST);
+    private static void installSysFloat(XposedModule module, Feature f,
+                                        AnchorTable anchors) {
+        Method core = anchors.method(AnchorKeys.NOTIFY_GUIDE_SYS_FLOAT);
+        // 字段声明在父类上：从命中方法的声明类沿继承链取父类，不硬编码宿主类名。
+        Class<?> base = core == null ? null : core.getDeclaringClass().getSuperclass();
+        Field permission = base == null ? null : fieldQuiet(base, FIELD_PERMISSION);
+        Field permissionList = base == null ? null : fieldQuiet(base, FIELD_PERMISSION_LIST);
         if (permission == null && permissionList == null) {
             HookKit.warn(module, f.id
-                    + " skip: SysPermissionGuideMode permission fields not found");
+                    + " skip: " + AnchorKeys.NOTIFY_GUIDE_SYS_FLOAT
+                    + " permission fields not found");
+            HookState.markNotFound(f, "系统浮条权限字段不可用");
             return;
         }
-        Method core = HookKit.findMethod(module, f, mode, "showFloatWithSysCore");
         setAccessibleQuiet(core);
-        HookKit.install(module, f, "SysPermissionGuideFloatMode#showFloatWithSysCore", core,
+        HookKit.install(module, f, AnchorKeys.NOTIFY_GUIDE_SYS_FLOAT, core,
                 notificationOnlySkip(module, f, permission, permissionList));
     }
 
-    /** 权限请求参数桥：通知权限改写为定位权限。 */
-    private static void installPermissionBridge(XposedModule module, Feature f, ClassLoader cl) {
-        Class<?> bridge = HookKit.findClass(module, f, cl, PERMISSION_BRIDGE);
-        if (bridge == null) {
-            return;
-        }
-        Method query = HookKit.findMethod(module, f, bridge, "i",
-                Activity.class, JSONObject.class, String.class);
-        HookKit.install(module, f, "pp2#i", query,
+    /** 权限请求参数桥：通知权限改写为定位权限；混淆类名由 anchors.json 提供。 */
+    private static void installPermissionBridge(XposedModule module, Feature f,
+                                                AnchorTable anchors) {
+        Method query = anchors.methodForCandidates(AnchorKeys.NOTIFY_PERMISSION_BRIDGE);
+        HookKit.install(module, f, AnchorKeys.NOTIFY_PERMISSION_BRIDGE, query,
                 permissionTypeRewrite(module, f));
     }
 
@@ -156,7 +142,7 @@ final class NotifyGuideHooks {
      */
     private static XposedInterface.Hooker permissionTypeRewrite(final XposedModule module,
                                                                 final Feature f) {
-        final String detail = "pp2#i";
+        final String detail = AnchorKeys.NOTIFY_PERMISSION_BRIDGE;
         final String logLine = f.id + " hit " + detail;
         return new XposedInterface.Hooker() {
             @Override
@@ -209,7 +195,7 @@ final class NotifyGuideHooks {
                                                                final Feature f,
                                                                final Field permission,
                                                                final Field permissionList) {
-        final String detail = "SysPermissionGuideFloatMode#showFloatWithSysCore";
+        final String detail = AnchorKeys.NOTIFY_GUIDE_SYS_FLOAT;
         final String logLine = f.id + " hit " + detail;
         return new XposedInterface.Hooker() {
             @Override

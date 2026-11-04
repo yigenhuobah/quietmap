@@ -1,0 +1,544 @@
+{
+  "schemaVersion": 1,
+  "app": "com.autonavi.minimap",
+  "appVersion": "17.02.0.2010",
+  "versionCode": 170200,
+  "generatedBy": "tools/gen_anchors.py",
+  "anchors": {
+    "msg_fetch_in_background": {
+      "c": "com.autonavi.minimap.bundle.msgbox.util.MessageBoxManager",
+      "m": "getMessageInBackground",
+      "s": "(Landroid/app/Activity;Z)V",
+      "feature": "AD-04",
+      "critical": true,
+      "note": "后台拉取营销消息"
+    },
+    "bg_msg_screen_receiver": {
+      "c": "com.autonavi.minimap.bundle.msgbox.push.BackgroundMsgScreenReceiver",
+      "m": "onReceive",
+      "s": "(Landroid/content/Context;Landroid/content/Intent;)V",
+      "feature": "AD-04",
+      "critical": true,
+      "note": "亮屏触发源"
+    },
+    "awaken_send_page_2p": {
+      "c": "com.autonavi.minimap.awaken.AwakenRequestHolder",
+      "m": "sendAwakenPage",
+      "s": "(Lcom/autonavi/minimap/awaken/param/AwakenPageRequest;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V",
+      "feature": "PV-01",
+      "critical": true,
+      "note": "唤端上报(2参)"
+    },
+    "awaken_send_page_3p": {
+      "c": "com.autonavi.minimap.awaken.AwakenRequestHolder",
+      "m": "sendAwakenPage",
+      "s": "(Lcom/autonavi/minimap/awaken/param/AwakenPageRequest;Lcom/autonavi/minimap/falcon/base/a;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V",
+      "feature": "PV-01",
+      "critical": false,
+      "note": "唤端上报(3参补充)"
+    },
+    "afc_tk_register": {
+      "c": "com.taobao.flowcustoms.afc.taoke.AfcTkManager",
+      "m": "registerTkFlag",
+      "s": "(Landroid/content/Context;)V",
+      "feature": "AD-05",
+      "critical": false,
+      "note": "淘宝客SDK注册"
+    },
+    "utdid_upload": {
+      "c": "com.ta.audid.upload.UtdidUploadTask",
+      "m": "upload",
+      "s": "()V",
+      "feature": "PV-02",
+      "critical": true,
+      "note": "指纹上传"
+    },
+    "utdid_upload_from_cache": {
+      "c": "com.ta.audid.upload.UtdidUploadTask",
+      "m": "uploadFromCache",
+      "s": "()V",
+      "feature": "PV-02",
+      "critical": false,
+      "note": "指纹缓存上传"
+    },
+    "utdid_req_server": {
+      "c": "com.ta.audid.upload.UtdidUploadTask",
+      "m": "reqServer",
+      "s": "(Ljava/lang/String;)Z",
+      "feature": "PV-02",
+      "critical": true,
+      "note": "服务端交换"
+    },
+    "h5_dispatch_gate": {
+      "c": "ec0",
+      "m": "dispatch",
+      "s": "(Landroid/content/Intent;)Z",
+      "feature": "PV-03",
+      "critical": true,
+      "note": "推广APK下载分发（混淆类 ec0；字符串锚定 action.autonavi.checkappupdate + Dispatch App Upgrade + appDownloadfail）",
+      "candidates": [
+        "ec0"
+      ],
+      "dexkit": [
+        "action.autonavi.checkappupdate",
+        "Dispatch App Upgrade",
+        "appDownloadfail"
+      ]
+    },
+    "popup_upgrade_dialog_run": {
+      "c": "com.amap.bundle.appupgrade.AppUpgradeController$j",
+      "m": "run",
+      "s": "()V",
+      "feature": "UI-01",
+      "critical": true,
+      "note": "升级弹窗（挂内部对话框 Runnable $j#run；旧的 q(e,ZZ)Z 是校验+安装引导总入口，返回 false 会连安装引导一起断，已弃用）"
+    },
+    "splash_gate_can_show": {
+      "c": "com.autonavi.bundle.amaphome.impl.BootBizDataPreloaderImpl",
+      "m": "canShowSplash",
+      "s": "()Ljava/lang/Boolean;",
+      "feature": "AD-01",
+      "critical": true,
+      "note": "开屏闸门(返回Boolean.FALSE走NO_SPLASH分支)"
+    },
+    "splash_gate_try_show": {
+      "c": "com.autonavi.minimap.impl.SplashScreenServiceImpl",
+      "m": "tryShowSplashView",
+      "s": "(ILjava/lang/String;)V",
+      "feature": "AD-01",
+      "critical": false,
+      "note": "展示层兜底(不调用)"
+    },
+    "splash_send_3p": {
+      "c": "com.autonavi.minimap.alimama.AlimamaRequestHolder",
+      "m": "sendSplashScreen",
+      "s": "(Lcom/autonavi/minimap/alimama/param/SplashScreenRequest;Lcom/autonavi/minimap/falcon/base/a;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V",
+      "feature": "AD-02",
+      "critical": true,
+      "note": "开屏广告请求(3参,dexsql实测falcon包名)"
+    },
+    "splash_send_2p": {
+      "c": "com.autonavi.minimap.alimama.AlimamaRequestHolder",
+      "m": "sendSplashScreen",
+      "s": "(Lcom/autonavi/minimap/alimama/param/SplashScreenRequest;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V",
+      "feature": "AD-02",
+      "critical": false,
+      "note": "开屏广告请求(2参重载)"
+    },
+    "splash_attempt_request_data": {
+      "c": "ah5",
+      "m": "attemptRequestData",
+      "s": "(IZ)V",
+      "feature": "AD-02",
+      "critical": true,
+      "note": "开屏广告请求调度（混淆类 ah5；字符串锚定「不发送请求」，旧版 Lze5）",
+      "candidates": [
+        "ah5"
+      ],
+      "dexkit": [
+        "不发送请求"
+      ]
+    },
+    "splash_shake_guide": {
+      "c": "com.autonavi.minimap.entity.SplashButtonInfo",
+      "m": "getShakeGuide",
+      "s": "()Ljava/lang/String;",
+      "feature": "AD-03",
+      "critical": false,
+      "note": "摇一摇引导清空"
+    },
+    "splash_shake_tip": {
+      "c": "com.autonavi.minimap.entity.SplashButtonInfo",
+      "m": "getShakeTip",
+      "s": "()Ljava/lang/String;",
+      "feature": "AD-03",
+      "critical": false,
+      "note": "摇一摇提示清空"
+    },
+    "splash_shake_speed_strict": {
+      "c": "com.autonavi.minimap.entity.SplashButtonInfo",
+      "m": "isSpeedStrict",
+      "s": "()Z",
+      "feature": "AD-03",
+      "critical": false,
+      "note": "摇一摇速度严格关"
+    },
+    "banner_send_list_2p": {
+      "c": "com.autonavi.minimap.banner.BannerRequestHolder",
+      "m": "sendList",
+      "s": "(Lcom/autonavi/minimap/banner/param/BannerListRequest;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V",
+      "feature": "AD-06",
+      "critical": true,
+      "note": "Banner拉取(2参重载)"
+    },
+    "banner_send_list_3p": {
+      "c": "com.autonavi.minimap.banner.BannerRequestHolder",
+      "m": "sendList",
+      "s": "(Lcom/autonavi/minimap/banner/param/BannerListRequest;Lcom/autonavi/minimap/falcon/base/a;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V",
+      "feature": "AD-06",
+      "critical": false,
+      "note": "Banner拉取(3参重载)"
+    },
+    "banner_manager_load": {
+      "c": "com.autonavi.bundle.banner.manager.BannerManager",
+      "m": "b",
+      "s": "(Ljava/lang/String;ZZLcom/autonavi/bundle/banner/manager/OnLoadBannerListener;)V",
+      "feature": "AD-06",
+      "critical": true,
+      "note": "运营位Banner加载"
+    },
+    "home_operate_refresh_splash_bar": {
+      "c": "com.autonavi.bundle.uitemplate.mapwidget.widget.activity.OperateActivityMapWidget",
+      "m": "refreshSplashBar",
+      "s": "(Lcom/autonavi/minimap/bundle/msgbox/entity/AmapMessage;Ljava/lang/String;Ljava/lang/String;Lcom/autonavi/minimap/bundle/msgbox/listener/ActivityEventCallback;)V",
+      "feature": "AD-07",
+      "critical": true,
+      "note": "首页运营活动条"
+    },
+    "msg_tip_show_tips": {
+      "c": "com.autonavi.bundle.uitemplate.mapwidget.widget.msgtip.MsgTipMapWidget",
+      "m": "showTips",
+      "s": "(Lcom/autonavi/minimap/bundle/msgbox/entity/AmapMessage;I)Z",
+      "feature": "AD-07",
+      "critical": true,
+      "note": "地图消息气泡(return false)"
+    },
+    "msg_get_messages_2p": {
+      "c": "com.autonavi.minimap.bundle.msgbox.util.MessageBoxManager",
+      "m": "getMessages",
+      "s": "(Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager$GetMessageListener;ZLzg2;)V",
+      "feature": "UI-02",
+      "critical": true,
+      "note": "消息拉取(2参重载)"
+    },
+    "msg_get_messages_3p": {
+      "c": "com.autonavi.minimap.bundle.msgbox.util.MessageBoxManager",
+      "m": "getMessages",
+      "s": "(Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager$GetMessageListener;ZZLzg2;)V",
+      "feature": "UI-02",
+      "critical": true,
+      "note": "消息拉取(3参重载)"
+    },
+    "msg_get_messages_4p": {
+      "c": "com.autonavi.minimap.bundle.msgbox.util.MessageBoxManager",
+      "m": "getMessages",
+      "s": "(Lcom/autonavi/minimap/bundle/msgbox/util/MessageBoxManager$GetMessageListener;ZZLzg2;Ljava/lang/String;)V",
+      "feature": "UI-02",
+      "critical": true,
+      "note": "消息拉取(4参重载)"
+    },
+    "msg_retrieve_remote": {
+      "c": "com.autonavi.minimap.bundle.msgbox.util.MessageBoxManager",
+      "m": "retrieveRemoteMessages",
+      "s": "(Ljava/util/Set;Ljava/lang/String;)V",
+      "feature": "UI-02",
+      "critical": true,
+      "note": "远程营销消息拉取"
+    },
+    "delivery_display_start": {
+      "c": "ev1",
+      "m": "start",
+      "s": "(Landroid/app/Activity;Lcom/autonavi/minimap/bundle/msgbox/entity/AmapMessage;)V",
+      "feature": "UI-02",
+      "critical": true,
+      "note": "主图投放（IDeliveryDisplay 实现类 ev1；旧版 Llt1）",
+      "candidates": [
+        "ev1"
+      ]
+    },
+    "badge_update_app": {
+      "c": "com.amap.bundle.badgesystem.ajxmodule.AjxModuleBadge",
+      "m": "updateAppBadge",
+      "s": "(Ljava/lang/String;I)V",
+      "feature": "UI-02",
+      "critical": true,
+      "note": "角标红点更新"
+    },
+    "badge_set_display": {
+      "c": "com.amap.bundle.badgesystem.ajxmodule.AjxModuleBadge",
+      "m": "setBadgeDisplay",
+      "s": "(Ljava/lang/String;Z)V",
+      "feature": "UI-02",
+      "critical": false,
+      "note": "角标显示(不调用)"
+    },
+    "launcher_badge_update_app": {
+      "c": "com.autonavi.jni.badgesystem.BadgeSystemManager",
+      "m": "updateAppBadge",
+      "s": "(Ljava/lang/String;I)V",
+      "feature": "UI-02",
+      "critical": false,
+      "note": "启动器角标"
+    },
+    "search_preset_word_request": {
+      "c": "com.autonavi.bundle.amaphome.components.searchbar.BaseSearchBar",
+      "m": "requestPreSetWord",
+      "s": "(ZLjava/lang/String;)V",
+      "feature": "UI-03",
+      "critical": true,
+      "note": "搜索框热词请求(唯一重载)"
+    },
+    "search_preset_word_count": {
+      "c": "com.autonavi.bundle.uitemplate.preset.PreSetWordManager",
+      "m": "d",
+      "s": "(Lp75;)V",
+      "feature": "UI-03",
+      "critical": false,
+      "note": "热词本地计数"
+    },
+    "search_preset_word_tracker": {
+      "c": "com.autonavi.bundle.amaphome.components.searchbar.BaseSearchBar",
+      "m": "uploadPreSetWordTracker",
+      "s": "(Lp75;)V",
+      "feature": "UI-03",
+      "critical": true,
+      "note": "热词天擎曝光上报(17.02从PreSetWordManager#e挪到BaseSearchBar)"
+    },
+    "search_preset_word_response": {
+      "c": "com.autonavi.bundle.uitemplate.ajx.ModuleSlideContainer",
+      "m": "responsePreSetWords",
+      "s": "(Ljava/lang/String;)V",
+      "feature": "UI-03",
+      "critical": false,
+      "note": "AJX热词回填(第二道保险)"
+    },
+    "h5_log_send_2p": {
+      "c": "com.autonavi.minimap.alimama.AlimamaRequestHolder",
+      "m": "sendH5Log",
+      "s": "(Lcom/autonavi/minimap/alimama/param/H5LogRequest;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V",
+      "feature": "AD-08",
+      "critical": true,
+      "note": "H5广告监测(2参重载)"
+    },
+    "h5_log_send_3p": {
+      "c": "com.autonavi.minimap.alimama.AlimamaRequestHolder",
+      "m": "sendH5Log",
+      "s": "(Lcom/autonavi/minimap/alimama/param/H5LogRequest;Lcom/autonavi/minimap/falcon/base/a;Lcom/amap/bundle/aosservice/response/AosResponseCallback;)V",
+      "feature": "AD-08",
+      "critical": false,
+      "note": "H5广告监测(3参重载)"
+    },
+    "float_layer_register": {
+      "c": "com.autonavi.minimap.basemap.floatinglayer.FloatingLayerManager",
+      "m": "a",
+      "s": "(Ljava/lang/String;Ljava/lang/String;Lorg/json/JSONObject;Lcom/autonavi/minimap/basemap/floatinglayer/FloatingLayerManager$b;)Ljava/lang/String;",
+      "feature": "AD-09",
+      "critical": true,
+      "note": "运营浮层注册(返回\"\")"
+    },
+    "msg_image_text_download_run": {
+      "c": "n8",
+      "m": "run",
+      "s": "()V",
+      "feature": "AD-10",
+      "critical": true,
+      "note": "图文素材下载任务（混淆类 n8；字符串锚定 invalid download item: + ImageTextMessageDownloader，旧版 La8）",
+      "candidates": [
+        "n8"
+      ],
+      "dexkit": [
+        "invalid download item: ",
+        "ImageTextMessageDownloader"
+      ]
+    },
+    "update_hint_config_download": {
+      "c": "com.amap.bundle.appupgrade.config.downloader.UpdateHintConfigDownloader",
+      "m": "a",
+      "s": "()V",
+      "feature": "UI-04",
+      "critical": true,
+      "note": "升级提示配置下载"
+    },
+    "dialog_conflict_add_to_queue": {
+      "c": "ry1",
+      "m": "addToQueue",
+      "s": "(Lcom/autonavi/bundle/amaphome/model/DialogConflictInfo;)Z",
+      "feature": "UI-04",
+      "critical": true,
+      "note": "首页弹窗冲突队列（IDialogConflictMgr 实现类 ry1；旧版 Lcx1）",
+      "candidates": [
+        "ry1"
+      ]
+    },
+    "track_splash_exposure": {
+      "c": "com.autonavi.minimap.track.b",
+      "m": "e",
+      "s": "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lcom/autonavi/minimap/entity/SplashButtonInfo;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/String;Ljava/lang/String;Lo82;ZLjava/lang/String;)V",
+      "feature": "PV-04",
+      "critical": true,
+      "note": "开屏曝光埋点"
+    },
+    "track_splash_aggregate": {
+      "c": "com.autonavi.minimap.track.b",
+      "m": "f",
+      "s": "(Ljava/lang/String;Ljava/lang/String;Ljava/util/ArrayList;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Lcom/autonavi/minimap/entity/SplashButtonInfo;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/String;Ljava/lang/String;ILjava/lang/String;Lo82;ZLjava/lang/String;)V",
+      "feature": "PV-04",
+      "critical": true,
+      "note": "开屏埋点聚合+三方监测"
+    },
+    "splash_log_upload": {
+      "c": "com.autonavi.minimap.track.SplashLogManager",
+      "m": "a",
+      "s": "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V",
+      "feature": "PV-04",
+      "critical": true,
+      "note": "开屏日志上传"
+    },
+    "ut_send": {
+      "c": "com.ut.mini.UTTracker",
+      "m": "send",
+      "s": "(Ljava/util/Map;)V",
+      "feature": "PV-04",
+      "critical": true,
+      "note": "UT统计总出口"
+    },
+    "ut_send_log": {
+      "c": "com.ut.mini.UTTracker",
+      "m": "sendLog",
+      "s": "(Ljava/util/Map;ILjava/util/List;)V",
+      "feature": "PV-04",
+      "critical": false,
+      "note": "UT落盘/转发入口"
+    },
+    "h5_shake_handle_event": {
+      "c": "com.alipay.mobile.nebulacore.plugin.H5ShakePlugin",
+      "m": "handleEvent",
+      "s": "(Lcom/alipay/mobile/h5container/api/H5Event;Lcom/alipay/mobile/h5container/api/H5BridgeContext;)Z",
+      "feature": "AD-11",
+      "critical": true,
+      "note": "H5摇一摇(只拦watchShake)"
+    },
+    "h5_sensor_register_gyroscope": {
+      "c": "com.alipay.mobile.aompdevice.shake.h5plugin.H5SensorPlugin",
+      "m": "registerGyroscopeListener",
+      "s": "(Lcom/alipay/mobile/h5container/api/H5Event;)Z",
+      "feature": "AD-11",
+      "critical": true,
+      "note": "H5陀螺仪注册"
+    },
+    "mini_app_shake_init": {
+      "c": "com.autonavi.nebulax.extensions.point.AMapAppStartShakePoint",
+      "m": "onInitialized",
+      "s": "()V",
+      "feature": "AD-11",
+      "critical": true,
+      "note": "小程序摇一摇初始化"
+    },
+    "shake_sensor_changed": {
+      "c": "com.autonavi.nebulax.utils.SensorManagerHelper",
+      "m": "onSensorChanged",
+      "s": "(Landroid/hardware/SensorEvent;)V",
+      "feature": "AD-11",
+      "critical": true,
+      "note": "摇一摇监听回调"
+    },
+    "msg_handle_push": {
+      "c": "com.autonavi.minimap.bundle.msgbox.util.MessageBoxManager",
+      "m": "handlePush",
+      "s": "(Ljava/lang/String;)V",
+      "feature": "AD-04",
+      "critical": true,
+      "note": "推送消息处理入口"
+    },
+    "bg_msg_manager_fetch": {
+      "c": "com.autonavi.minimap.bundle.msgbox.push.BackgroundMsgManager",
+      "m": "a",
+      "s": "(Lcom/autonavi/minimap/bundle/msgbox/push/IBackgroundMsgFetchListener;)V",
+      "feature": "AD-04",
+      "critical": false,
+      "note": "后台营销消息拉取"
+    },
+    "msg_fetch_from_main_map": {
+      "c": "com.autonavi.minimap.bundle.msgbox.util.MessageBoxManager",
+      "m": "fetchMessageFromMainMap",
+      "s": "(IZLcom/autonavi/minimap/bundle/msgbox/api/IMsgboxService$MainMapUIUpdater;)V",
+      "feature": "AD-04",
+      "critical": false,
+      "note": "主图消息拉取包装"
+    },
+    "ops_module_switch": {
+      "c": "com.amap.bundle.cloudconfig.appinit.AppInitServiceImpl",
+      "m": "getOperationModuleSwitch",
+      "s": "(Z)Z",
+      "feature": "AD-12",
+      "critical": true,
+      "note": "运营活动模块开关(return false)"
+    },
+    "ops_activity_open_3p": {
+      "c": "com.autonavi.minimap.bundle.activities.ActivitiesService",
+      "m": "openOpetationsActivities",
+      "s": "(Lcom/autonavi/map/fragmentcontainer/page/AbstractBasePage;Ljava/lang/String;Ljava/lang/String;)V",
+      "feature": "AD-12",
+      "critical": true,
+      "note": "活动打开入口(3参)"
+    },
+    "ops_activity_open_4p": {
+      "c": "com.autonavi.minimap.bundle.activities.ActivitiesService",
+      "m": "openOpetationsActivities",
+      "s": "(Lcom/autonavi/map/fragmentcontainer/page/AbstractBasePage;Ljava/lang/String;Ljava/lang/String;Z)V",
+      "feature": "AD-12",
+      "critical": false,
+      "note": "活动打开入口(4参重载)"
+    },
+    "notify_guide_show": {
+      "c": "com.alipay.android.phone.mobilesdk.permission.guide.PermissionGuideFloatShow",
+      "m": "showNotificationGuide",
+      "s": "(Lcom/alipay/android/phone/mobilesdk/permission/guide/PermissionGuideRequest;)V",
+      "feature": "UI-05",
+      "critical": true,
+      "note": "通知权限底部浮条(不展示)"
+    },
+    "notify_guide_sys_float": {
+      "c": "com.alipay.android.phone.mobilesdk.permission.guide.sys.SysPermissionGuideFloatMode",
+      "m": "showFloatWithSysCore",
+      "s": "()V",
+      "feature": "UI-05",
+      "critical": true,
+      "note": "系统浮条(仅通知权限跳过)"
+    },
+    "notify_permission_bridge": {
+      "c": "pp2",
+      "m": "i",
+      "s": "(Landroid/app/Activity;Lorg/json/JSONObject;Ljava/lang/String;)V",
+      "feature": "UI-05",
+      "critical": true,
+      "note": "权限请求参数桥（混淆类 pp2；permissionType 改写）",
+      "candidates": [
+        "pp2"
+      ]
+    },
+    "msg_center_session_list": {
+      "c": "com.amap.bundle.badgesystem.ajxmodule.AjxModuleBadge",
+      "m": "getAllSessionList",
+      "s": "(ZLcom/autonavi/minimap/ajx3/core/JsFunctionCallback;)V",
+      "feature": "UI-06",
+      "critical": true,
+      "note": "AJX会话列表清空(回调{\"convList\":[]})"
+    },
+    "msg_center_badge_info": {
+      "c": "com.amap.bundle.badgesystem.ajxmodule.AjxModuleBadge",
+      "m": "getBadgeInfo",
+      "s": "(Ljava/lang/String;)Ljava/lang/String;",
+      "feature": "UI-06",
+      "critical": true,
+      "note": "消息Tab角标归零({\"value\":0})"
+    },
+    "msg_center_cache_get": {
+      "c": "com.autonavi.minimap.ajx3.modules.internalmodules.AjxModuleLocalStorage",
+      "m": "getItemSync",
+      "s": "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+      "feature": "UI-06",
+      "critical": true,
+      "note": "最近消息缓存清空(message_tab/recentlyMsgList-*)"
+    },
+    "msg_center_cache_set": {
+      "c": "com.autonavi.minimap.ajx3.modules.internalmodules.AjxModuleLocalStorage",
+      "m": "setItemSync",
+      "s": "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Object;)Z",
+      "feature": "UI-06",
+      "critical": false,
+      "note": "最近消息缓存写入拦截'"
+    }
+  },
+  "classes": {}
+}

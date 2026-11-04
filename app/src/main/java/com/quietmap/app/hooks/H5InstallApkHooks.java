@@ -5,6 +5,8 @@ import android.net.Uri;
 
 import com.quietmap.app.Feature;
 import com.quietmap.app.HookState;
+import com.quietmap.app.anchor.AnchorKeys;
+import com.quietmap.app.anchor.AnchorTable;
 import com.quietmap.app.dexkit.DexKitLocator;
 
 import java.lang.reflect.Method;
@@ -21,8 +23,8 @@ import io.github.libxposed.api.XposedModule;
  * - 旧挂载点 com.alipay.mobile.common.info.DeviceInfo#installApk 全 dex 0 调用点
  *   （method_calls 空结果，死代码），无法复活。
  * - 推广下载安装真实链，三条入口同一漏斗：IntentController#d 组装
- *   IIntentInterceptor 链 → 混淆分发器 Lec0;#dispatch(Intent)Z
- *   （日志 tag "AppUpgradeIntentDispatcher"）：
+ *   IIntentInterceptor 链 → 混淆分发器（锚点 h5_dispatch_gate，当前为 ec0）
+ *   的 dispatch(Intent)Z（日志 tag "AppUpgradeIntentDispatcher"）：
  *     ① action 以 "appDownloadfail" 开头 → 读 SplashApp* prefs 重试（pc0.a(2,..)）
  *     ② extras appDownloadUrl + appDownloadName 均非空 → pc0.a(3,..)
  *     ③ data host=openFeature 且 query featureName=DownloadApp → 读
@@ -37,7 +39,7 @@ import io.github.libxposed.api.XposedModule;
  *   method_calls 实证：Laa0.a 仅有 r(File) 与 pc0$a$a.run 两个调用方（双链共用，
  *   本身不可作挂载点）；AppUpgradeController 及其内部类从不调用 pc0/ec0/mc0；
  *   pc0.a 唯一调用方是 ec0.dispatch。
- * - 结论：ec0.dispatch 是「推广 vs 官方」按 intent 内容分流的第一站，只吞三个
+ * - 结论：dispatch 是「推广 vs 官方」按 intent 内容分流的第一站，只吞三个
  *   推广分支即可断源（下载与安装都不再发生），官方分支与升级安装链不受影响。
  *
  * 语义（保守 skip）：命中推广分支 → 不调用原方法、返回 Boolean.TRUE（与原方法
@@ -46,25 +48,21 @@ import io.github.libxposed.api.XposedModule;
  * try/catch(Throwable)，异常回退路径 proceed 恰好一次（fail-open），任何路径
  * proceed 至多一次。
  *
- * 定位策略与 MsgImageTextHooks 一致：类名 ["ec0"] 优先（毫秒级直取，命中需过
- * isDispatcherDispatch 校验：boolean(Intent) 签名 + IIntentInterceptor 类型
- * （dexsql class_interfaces 实测）+ 非框架类）；miss/校验不过后的 DexKit 锚点扫描
- * 转后台延迟执行——锚点取 dexsql method_strings 实测的
+ * 定位策略与 MsgImageTextHooks 一致：anchors.json 的 candidates 优先
+ * （毫秒级直取，命中需过 isDispatcherDispatch 校验：boolean(Intent) 签名 +
+ * 声明类实现声明了同名方法的非框架接口（17.02 为 IIntentInterceptor）+ 非框架类）；
+ * miss/校验不过后的 DexKit 锚点扫描转后台延迟执行——dexkit 锚点取
  * "action.autonavi.checkappupdate" + "Dispatch App Upgrade" + "appDownloadfail"
- * （三条在本 APK 内交集唯一命中 Lec0#dispatch），boolean(Intent) 签名强校验与
- * 唯一性拒绝猜测由 DexKitLocator 完成。不复用 HookKit#installByAnchorLate：
+ * （三条在本 APK 内交集唯一命中该 dispatch，与 check-mounts 共用同一张表），
+ * boolean(Intent) 签名强校验与唯一性拒绝猜测由 DexKitLocator 完成。
+ * 不复用 HookKit#installByAnchorLate：
  * 它固定 skipVoid Hooker，而 dispatch 返回 boolean（skipVoid 返回 null 会破坏
  * 调用方的 boolean 契约），故在本地用 HookKit#sDexKitLateExecutor + 幂等标记
  * 自管延迟兜底。两路都失败记 skip，fail-open。
  */
 final class H5InstallApkHooks {
 
-    private static final String DISPATCHER_CLASS = "ec0";
-    private static final String DISPATCH_METHOD = "dispatch";
-    private static final String DISPATCH_LABEL = "Lec0#dispatch";
-    /** dexsql class_interfaces 实测：Lec0 实现该接口（IntentController 链的强类型身份）。 */
-    private static final String INTENT_INTERCEPTOR =
-            "com.autonavi.minimap.intent.IIntentInterceptor";
+    private static final String DISPATCH_LABEL = AnchorKeys.H5_DISPATCH_GATE;
 
     /** 官方升级检查 action：dispatch 的官方分支，永远放行。 */
     private static final String ACTION_CHECK_UPDATE = "action.autonavi.checkappupdate";
@@ -76,14 +74,6 @@ final class H5InstallApkHooks {
     private static final String URI_PARAM_FEATURE = "featureName";
     private static final String URI_FEATURE_DOWNLOAD_APP = "DownloadApp";
 
-    /**
-     * DexKit 兜底锚点（dexsql method_strings 实测；三条交集全 APK 唯一命中
-     * Lec0#dispatch，与 check-mounts.sh 的锚点监控保持一致）。
-     */
-    private static final String[] DISPATCH_ANCHORS = {
-            ACTION_CHECK_UPDATE, "Dispatch App Upgrade", ACTION_DOWNLOAD_FAIL_PREFIX,
-    };
-
     /** 延迟兜底只提交一次：installAll 重跑时不得重复排队/重复落钩。 */
     private static final AtomicBoolean sLateSubmitted = new AtomicBoolean(false);
 
@@ -93,47 +83,52 @@ final class H5InstallApkHooks {
     static void install(XposedModule module, ClassLoader cl) {
         Feature f = Feature.H5_INSTALL_APK;
         try {
-            installDispatchGate(module, f, cl);
+            AnchorTable anchors = HookKit.loadAnchors(module, f, cl);
+            if (anchors == null) {
+                return;
+            }
+            installDispatchGate(module, f, cl, anchors);
         } catch (Throwable t) {
             HookKit.error(module, f.id + " install aborted", t);
         }
     }
 
     /**
-     * 推广下载分发门控：类名列表优先（check-mounts 体检出新名后追加），命中需过
-     * {@link #isDispatcherDispatch} 校验，同步落钩；miss/校验不过后的 DexKit 锚点
-     * 扫描转后台延迟执行，本方法在启动关键路径上不等待扫描结果。
+     * 推广下载分发门控：anchors.json 的 candidates 类名快路径优先（毫秒级），
+     * 命中需过 {@link #isDispatcherDispatch} 校验，同步落钩；miss/校验不过后的
+     * DexKit 锚点扫描转后台延迟执行，本方法在启动关键路径上不等待扫描结果。
      */
-    private static void installDispatchGate(XposedModule module, Feature f, ClassLoader cl) {
-        try {
-            Class<?> cls = Class.forName(DISPATCHER_CLASS, false, cl);
-            Method m = HookKit.findMethodQuiet(cls, DISPATCH_METHOD, Intent.class);
-            if (m != null && isDispatcherDispatch(m, loadInterceptorInterface(cl))) {
-                HookKit.info(module, f.id
-                        + " promo-download dispatcher located via class-name list: "
-                        + DISPATCHER_CLASS);
-                HookKit.install(module, f, DISPATCH_LABEL, m, promoGate(module, f, DISPATCH_LABEL));
-                return;
-            }
-            if (m != null) {
-                // 短名被复用成别的类：不吞无关 intent，降级到锚点串定位。
-                HookKit.warn(module, f.id + " class-name hit " + DISPATCHER_CLASS
-                        + "#" + DISPATCH_METHOD
-                        + " failed validation (boolean(Intent)/IIntentInterceptor/non-framework),"
-                        + " dexkit anchor deferred to background");
-            }
-        } catch (Throwable ignored) {
-            // 类名 miss：走 DexKit 锚点兜底。
+    private static void installDispatchGate(XposedModule module, Feature f, ClassLoader cl,
+                                            AnchorTable anchors) {
+        Method m = anchors.methodForCandidates(AnchorKeys.H5_DISPATCH_GATE);
+        if (m != null && isDispatcherDispatch(m)) {
+            HookKit.info(module, f.id
+                    + " promo-download dispatcher located via anchor candidates: "
+                    + m.getDeclaringClass().getName());
+            HookKit.install(module, f, DISPATCH_LABEL, m, promoGate(module, f, DISPATCH_LABEL));
+            return;
         }
-        HookKit.warn(module, f.id + " class-name list miss, dexkit anchor deferred to background");
-        submitLateAnchor(module, f, cl);
+        if (m != null) {
+            // 短名被复用成别的类：不吞无关 intent，降级到锚点串定位。
+            HookKit.warn(module, f.id + " anchor candidate "
+                    + m.getDeclaringClass().getName()
+                    + " failed validation (boolean(Intent)/interface/non-framework),"
+                    + " dexkit anchor deferred to background");
+        } else {
+            HookKit.warn(module, f.id
+                    + " anchor candidates miss, dexkit anchor deferred to background");
+        }
+        submitLateAnchor(module, f, cl,
+                anchors.methodName(AnchorKeys.H5_DISPATCH_GATE),
+                anchors.dexkit(AnchorKeys.H5_DISPATCH_GATE));
     }
 
     /**
      * 延迟兜底任务提交（与 HookKit#installByAnchorLate 同形的幂等包装）。
      * 同一 Feature 只提交一次；执行器被 JVM 单测置 null 时放弃兜底。
      */
-    private static void submitLateAnchor(XposedModule module, Feature f, ClassLoader cl) {
+    private static void submitLateAnchor(XposedModule module, Feature f, ClassLoader cl,
+                                         String methodName, String[] dexkitAnchors) {
         if (!sLateSubmitted.compareAndSet(false, true)) {
             return;
         }
@@ -141,15 +136,16 @@ final class H5InstallApkHooks {
         if (executor == null) {
             return;
         }
-        executor.execute(() -> finishLateAnchor(module, f, cl));
+        executor.execute(() -> finishLateAnchor(module, f, cl, methodName, dexkitAnchors));
     }
 
     /** 延迟兜底任务体：锚点查询 → 形状校验 → 命中落钩 / 未命中记 skip + 判整体失效。 */
-    private static void finishLateAnchor(XposedModule module, Feature f, ClassLoader cl) {
+    private static void finishLateAnchor(XposedModule module, Feature f, ClassLoader cl,
+                                         String methodName, String[] dexkitAnchors) {
         Method m = null;
         try {
-            m = DexKitLocator.findMethod(cl, f, null, DISPATCH_METHOD, boolean.class,
-                    new Class<?>[]{Intent.class}, DISPATCH_ANCHORS);
+            m = DexKitLocator.findMethod(cl, f, null, methodName, boolean.class,
+                    new Class<?>[]{Intent.class}, dexkitAnchors);
         } catch (Throwable t) {
             HookKit.error(module, f.id + " late dexkit anchor error " + DISPATCH_LABEL, t);
         }
@@ -218,7 +214,7 @@ final class H5InstallApkHooks {
     }
 
     /**
-     * 推广分支判定（与 Lec0#dispatch smali 分支同构的纯函数，供 JVM 单测）：
+     * 推广分支判定（与 dispatch smali 分支同构的纯函数，供 JVM 单测）：
      * ① action 以 appDownloadfail 开头（失败重试）；
      * ② appDownloadUrl + appDownloadName 双非空（extras 入口）；
      * ③ host=openFeature（忽略大小写）且 featureName=DownloadApp（忽略大小写，
@@ -246,14 +242,6 @@ final class H5InstallApkHooks {
         return s != null && !s.isEmpty();
     }
 
-    private static Class<?> loadInterceptorInterface(ClassLoader cl) {
-        try {
-            return Class.forName(INTENT_INTERCEPTOR, false, cl);
-        } catch (Throwable t) {
-            return null;
-        }
-    }
-
     /**
      * dispatch 形状校验：boolean dispatch(Intent) 且非框架类。
      * 短名/通用方法名不可信，签名不过就拒收（与 MsgImageTextHooks#isDownloaderRun
@@ -270,8 +258,36 @@ final class H5InstallApkHooks {
     }
 
     /**
-     * 快路径命中校验：形状 + IIntentInterceptor 类型。接口加载失败视为校验不过，
-     * 降级 DexKit 锚点定位（宁可 miss 也不把同名无关类吞成 hit）。
+     * 快路径命中校验：形状 + 声明类实现了声明同名同参方法的非框架接口。
+     * 17.02 的 dispatch 来自 IIntentInterceptor 接口分派；按「接口声明了同一方法」
+     * 判定，不硬编码接口类名（类名由 anchors.json 的 c 与运行时反射给出）。
+     * 接口不匹配视为校验不过，降级 DexKit 锚点定位（宁可 miss 也不把同名无关类
+     * 吞成 hit）。
+     */
+    static boolean isDispatcherDispatch(Method m) {
+        if (!isDispatchShape(m)) {
+            return false;
+        }
+        Class<?>[] interfaces = m.getDeclaringClass().getInterfaces();
+        for (Class<?> iface : interfaces) {
+            if (HookKit.isFrameworkClass(iface.getName())) {
+                continue;
+            }
+            try {
+                iface.getDeclaredMethod(m.getName(), m.getParameterTypes());
+                return true;
+            } catch (NoSuchMethodException ignored) {
+                // 该接口不声明 dispatch：继续看下一个接口
+            } catch (Throwable ignored) {
+                // 接口反射失败按不匹配处理
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 显式接口注入版本：供 JVM 单测用最小 fixture 验证「实现接口才接受」。
+     * 生产路径用 {@link #isDispatcherDispatch(Method)}，接口从声明类反射得到。
      */
     static boolean isDispatcherDispatch(Method m, Class<?> interceptorInterface) {
         if (!isDispatchShape(m) || interceptorInterface == null) {

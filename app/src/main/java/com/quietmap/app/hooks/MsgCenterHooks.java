@@ -4,6 +4,8 @@ import android.util.Log;
 
 import com.quietmap.app.Feature;
 import com.quietmap.app.HookState;
+import com.quietmap.app.anchor.AnchorKeys;
+import com.quietmap.app.anchor.AnchorTable;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -61,13 +63,6 @@ import io.github.libxposed.api.XposedModule;
  */
 final class MsgCenterHooks {
 
-    private static final String AJX_MODULE_BADGE =
-            "com.amap.bundle.badgesystem.ajxmodule.AjxModuleBadge";
-    private static final String AJX_MODULE_LOCAL_STORAGE =
-            "com.autonavi.minimap.ajx3.modules.internalmodules.AjxModuleLocalStorage";
-    private static final String JS_FUNCTION_CALLBACK =
-            "com.autonavi.minimap.ajx3.core.JsFunctionCallback";
-
     /** getAllSessionList 回调的空会话列表 JSON（JS 侧按 {"convList":[...]} 解析）。 */
     static final String EMPTY_SESSION_LIST_JSON = "{\"convList\":[]}";
     /** getBadgeInfo("messagetab") 的零角标 JSON。 */
@@ -93,9 +88,13 @@ final class MsgCenterHooks {
     static void install(XposedModule module, ClassLoader cl) {
         Feature f = Feature.MSG_CENTER;
         try {
-            installSessionList(module, f, cl);
-            installBadgeInfo(module, f, cl);
-            installRecentListCache(module, f, cl);
+            AnchorTable anchors = HookKit.loadAnchors(module, f, cl);
+            if (anchors == null) {
+                return;
+            }
+            installSessionList(module, f, anchors);
+            installBadgeInfo(module, f, anchors);
+            installRecentListCache(module, f, anchors);
             Batch6Probe.install(module, f, cl);
         } catch (Throwable t) {
             HookKit.error(module, f.id + " install aborted", t);
@@ -103,66 +102,76 @@ final class MsgCenterHooks {
     }
 
     /**
-     * 会话列表：AjxModuleBadge#getAllSessionList(boolean, JsFunctionCallback)V。
+     * 会话列表：AjxModuleBadge#getAllSessionList(boolean, JsFunctionCallback)V
+     * （锚点 msg_center_session_list）。回调类型从锚点方法第 2 个参数取得；
      * 只对消息页/我的页回调空列表，其他页面原样放行。
      */
-    private static void installSessionList(XposedModule module, Feature f, ClassLoader cl) {
-        Class<?> badge = HookKit.findClass(module, f, cl, AJX_MODULE_BADGE);
-        Class<?> callback = HookKit.findClass(module, f, cl, JS_FUNCTION_CALLBACK);
-        if (badge == null || callback == null) {
-            return;
-        }
-        Method getAll = HookKit.findMethod(module, f, badge,
-                "getAllSessionList", boolean.class, callback);
-        Method callbackMethod = HookKit.findMethodQuiet(callback, "callback", Object[].class);
+    private static void installSessionList(XposedModule module, Feature f,
+                                           AnchorTable anchors) {
+        Method getAll = anchors.method(AnchorKeys.MSG_CENTER_SESSION_LIST);
+        Class<?> callback = getAll == null ? null : getAll.getParameterTypes()[1];
+        Method callbackMethod = findObjectArrayCallback(callback);
         if (callbackMethod == null) {
             HookKit.warn(module, f.id
-                    + " skip: JsFunctionCallback#callback(Object[]) signature not found");
+                    + " skip: " + AnchorKeys.MSG_CENTER_SESSION_LIST
+                    + " callback(Object[]) signature not found");
+            HookState.markNotFound(f, "会话列表回调锚点不可用");
             return;
         }
         setAccessibleQuiet(module, f, callbackMethod);
-        HookKit.install(module, f, "AjxModuleBadge#getAllSessionList", getAll,
+        HookKit.install(module, f, AnchorKeys.MSG_CENTER_SESSION_LIST, getAll,
                 emptySessionList(module, f, callbackMethod));
     }
 
     /**
-     * 我的页消息图标角标：AjxModuleBadge#getBadgeInfo("messagetab")String。
-     * 只对消息页/我的页返回 {"value":0}，其他 badgeId/页面放行。
+     * 在回调接口上找 `callback(Object[])` 形状的方法：参数只有一个 Object[]
+     * （17.02 的 JsFunctionCallback 只有该形状的方法）。按形状匹配而不硬编码
+     * 宿主方法名，接口改名/换包只要形状不变仍能命中。
      */
-    private static void installBadgeInfo(XposedModule module, Feature f, ClassLoader cl) {
-        Class<?> badge = HookKit.findClass(module, f, cl, AJX_MODULE_BADGE);
-        if (badge == null) {
-            return;
+    static Method findObjectArrayCallback(Class<?> callback) {
+        if (callback == null) {
+            return null;
         }
-        Method getBadgeInfo = HookKit.findMethod(module, f, badge,
-                "getBadgeInfo", String.class);
-        HookKit.install(module, f, "AjxModuleBadge#getBadgeInfo", getBadgeInfo,
+        for (Method method : callback.getMethods()) {
+            Class<?>[] params = method.getParameterTypes();
+            if (params.length == 1 && params[0] == Object[].class) {
+                return method;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 我的页消息图标角标：AjxModuleBadge#getBadgeInfo("messagetab")String
+     * （锚点 msg_center_badge_info）。只对消息页/我的页返回 {"value":0}，
+     * 其他 badgeId/页面放行。
+     */
+    private static void installBadgeInfo(XposedModule module, Feature f,
+                                         AnchorTable anchors) {
+        Method getBadgeInfo = anchors.method(AnchorKeys.MSG_CENTER_BADGE_INFO);
+        HookKit.install(module, f, AnchorKeys.MSG_CENTER_BADGE_INFO, getBadgeInfo,
                 zeroMessageTabBadge(module, f));
     }
 
     /**
-     * 最近消息缓存：AjxModuleLocalStorage#getItemSync("message_tab",
-     * "recentlyMsgList-<uid>")String。读到该 key 返回 "[]"；
-     * setItemSync 对同一 key 直接返回 true，不写入营销消息缓存。
+     * 最近消息缓存：getItemSync("message_tab", "recentlyMsgList-<uid>")String
+     * （锚点 msg_center_cache_get）。读到该 key 返回 "[]"；
+     * setItemSync（锚点 msg_center_cache_set）对同一 key 直接返回 true，
+     * 不写入营销消息缓存。
      */
-    private static void installRecentListCache(XposedModule module, Feature f, ClassLoader cl) {
-        Class<?> storage = HookKit.findClass(module, f, cl, AJX_MODULE_LOCAL_STORAGE);
-        if (storage == null) {
-            return;
-        }
-        Method getSync = HookKit.findMethod(module, f, storage,
-                "getItemSync", String.class, String.class);
-        HookKit.install(module, f, "AjxModuleLocalStorage#getItemSync", getSync,
+    private static void installRecentListCache(XposedModule module, Feature f,
+                                               AnchorTable anchors) {
+        Method getSync = anchors.method(AnchorKeys.MSG_CENTER_CACHE_GET);
+        HookKit.install(module, f, AnchorKeys.MSG_CENTER_CACHE_GET, getSync,
                 emptyRecentList(module, f));
 
-        Method setSync = HookKit.findMethodQuiet(storage, "setItemSync",
-                String.class, String.class, Object.class);
+        Method setSync = anchors.method(AnchorKeys.MSG_CENTER_CACHE_SET);
         if (setSync != null) {
-            HookKit.install(module, f, "AjxModuleLocalStorage#setItemSync", setSync,
+            HookKit.install(module, f, AnchorKeys.MSG_CENTER_CACHE_SET, setSync,
                     skipRecentListWrite(module, f));
         } else {
             HookKit.warn(module, f.id
-                    + " skip: AjxModuleLocalStorage#setItemSync not found");
+                    + " skip: " + AnchorKeys.MSG_CENTER_CACHE_SET + " not found");
         }
     }
 
@@ -170,7 +179,7 @@ final class MsgCenterHooks {
     private static XposedInterface.Hooker emptySessionList(final XposedModule module,
                                                            final Feature f,
                                                            final Method callbackMethod) {
-        final String logLine = f.id + " hit AjxModuleBadge#getAllSessionList";
+        final String logLine = f.id + " hit " + AnchorKeys.MSG_CENTER_SESSION_LIST;
         return new XposedInterface.Hooker() {
             @Override
             public Object intercept(XposedInterface.Chain chain) throws Throwable {
@@ -203,7 +212,7 @@ final class MsgCenterHooks {
     /** 角标 Hooker：只把 messagetab 的角标归零，其他 badgeId 原样放行。 */
     private static XposedInterface.Hooker zeroMessageTabBadge(final XposedModule module,
                                                               final Feature f) {
-        final String logLine = f.id + " hit AjxModuleBadge#getBadgeInfo";
+        final String logLine = f.id + " hit " + AnchorKeys.MSG_CENTER_BADGE_INFO;
         return new XposedInterface.Hooker() {
             @Override
             public Object intercept(XposedInterface.Chain chain) throws Throwable {
@@ -226,7 +235,7 @@ final class MsgCenterHooks {
     /** 最近消息缓存读取 Hooker：命中固定 namespace/key 时返回空数组。 */
     private static XposedInterface.Hooker emptyRecentList(final XposedModule module,
                                                           final Feature f) {
-        final String logLine = f.id + " hit AjxModuleLocalStorage#getItemSync";
+        final String logLine = f.id + " hit " + AnchorKeys.MSG_CENTER_CACHE_GET;
         return new XposedInterface.Hooker() {
             @Override
             public Object intercept(XposedInterface.Chain chain) throws Throwable {
@@ -248,7 +257,7 @@ final class MsgCenterHooks {
     /** 最近消息缓存写入 Hooker：命中固定 namespace/key 时返回 true，不落盘。 */
     private static XposedInterface.Hooker skipRecentListWrite(final XposedModule module,
                                                               final Feature f) {
-        final String logLine = f.id + " hit AjxModuleLocalStorage#setItemSync";
+        final String logLine = f.id + " hit " + AnchorKeys.MSG_CENTER_CACHE_SET;
         return new XposedInterface.Hooker() {
             @Override
             public Object intercept(XposedInterface.Chain chain) throws Throwable {
@@ -349,10 +358,12 @@ final class MsgCenterHooks {
             return null;
         }
         try {
+            // anchor-allowlist: AJX 容器公开反射入口，属于稳定 SDK 接口而非宿主混淆挂载点
             Object context = module.getClass().getMethod("getContext").invoke(module);
             if (context == null) {
                 return null;
             }
+            // anchor-allowlist: AJX 容器公开反射入口，属于稳定 SDK 接口而非宿主混淆挂载点
             Object path = context.getClass().getMethod("getJsPath").invoke(context);
             return path instanceof String ? (String) path : null;
         } catch (Throwable t) {

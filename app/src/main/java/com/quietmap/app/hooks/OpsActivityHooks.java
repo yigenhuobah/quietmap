@@ -2,6 +2,8 @@ package com.quietmap.app.hooks;
 
 import com.quietmap.app.Feature;
 import com.quietmap.app.HookState;
+import com.quietmap.app.anchor.AnchorKeys;
+import com.quietmap.app.anchor.AnchorTable;
 
 import java.lang.reflect.Method;
 import java.util.concurrent.ConcurrentHashMap;
@@ -14,18 +16,18 @@ import io.github.libxposed.api.XposedModule;
 /**
  * ops_activity 运营活动弹窗净化。
  *
- * dexsql 实测（高德 17.01.0.2012）：
+ * 三个挂载点的完整签名由 anchors.json 提供：
  *
- * 1) com.amap.bundle.cloudconfig.appinit.AppInitServiceImpl#getOperationModuleSwitch(Z)Z
+ * 1) ops_module_switch —— AppInitServiceImpl#getOperationModuleSwitch(Z)Z
  *    运营活动模块总开关。返回常量 false，模块不启用，打车页 88VIP 等运营弹窗
- *    不再加载。接口 IAppInitService 上也有同名方法，只挂实现类。
+ *    不再加载。接口 IAppInitService 上也有同名方法，只挂实现类（锚点表 c 指定）。
  *    全 dex 唯一静态调用方是 ActivitiesService#requestOperationsActivities。
  *
- * 2) com.autonavi.minimap.bundle.activities.ActivitiesService#openOpetationsActivities
- *    活动打开入口，3 参与 4 参（末尾 boolean）两个重载都挂。命中时不调用原方法
+ * 2) ops_activity_open_3p / 3) ops_activity_open_4p —— ActivitiesService 的活动
+ *    打开入口，3 参与 4 参（末尾 boolean）两个重载都挂。命中时不调用原方法
  *    （skipVoid），活动页不再打开；异常回退 proceed 恰好一次（fail-open）。
- *    3 参静态调用方：Lay5#f（JS 桥）、ModuleActivities$1#callback（AJX 请求回调）、
- *    步行/骑行结束页及其 presenter 的 callback；4 参只被 3 参转发壳调用。
+ *    3 参静态调用方：JS 桥、AJX 请求回调、步行/骑行结束页及其 presenter 的
+ *    callback；4 参只被 3 参转发壳调用。
  *
  * 只动业务层入口，不 hook 框架类。会连带屏蔽导航结束页的加油/停车活动，
  * 因此设置页可单独关闭本项。
@@ -40,19 +42,6 @@ import io.github.libxposed.api.XposedModule;
  */
 final class OpsActivityHooks {
 
-    private static final String APP_INIT_IMPL =
-            "com.amap.bundle.cloudconfig.appinit.AppInitServiceImpl";
-    private static final String ACTIVITIES_SERVICE =
-            "com.autonavi.minimap.bundle.activities.ActivitiesService";
-    private static final String ABSTRACT_BASE_PAGE =
-            "com.autonavi.map.fragmentcontainer.page.AbstractBasePage";
-
-    private static final String SWITCH_LABEL = "AppInitServiceImpl#getOperationModuleSwitch";
-    private static final String OPEN_3P_LABEL =
-            "ActivitiesService#openOpetationsActivities(3p)";
-    private static final String OPEN_4P_LABEL =
-            "ActivitiesService#openOpetationsActivities(4p)";
-
     /** 同一 key 的观测日志最小间隔。 */
     static final long LOG_WINDOW_MS = 10_000L;
 
@@ -64,36 +53,35 @@ final class OpsActivityHooks {
     static void install(XposedModule module, ClassLoader cl) {
         Feature f = Feature.OPS_ACTIVITY;
         try {
-            installModuleSwitch(module, f, cl);
-            installOpenActivities(module, f, cl);
+            AnchorTable anchors = HookKit.loadAnchors(module, f, cl);
+            if (anchors == null) {
+                return;
+            }
+            installModuleSwitch(module, f, anchors);
+            installOpenActivities(module, f, anchors);
         } catch (Throwable t) {
             HookKit.error(module, f.id + " install aborted", t);
         }
     }
 
     /** 运营活动模块总开关：固定返回 false。 */
-    private static void installModuleSwitch(XposedModule module, Feature f, ClassLoader cl) {
-        Class<?> impl = HookKit.findClass(module, f, cl, APP_INIT_IMPL);
-        Method switchMethod = HookKit.findMethod(module, f, impl,
-                "getOperationModuleSwitch", boolean.class);
-        HookKit.install(module, f, SWITCH_LABEL, switchMethod, moduleSwitch(module, f));
+    private static void installModuleSwitch(XposedModule module, Feature f,
+                                            AnchorTable anchors) {
+        Method switchMethod = anchors.method(AnchorKeys.OPS_MODULE_SWITCH);
+        HookKit.install(module, f, AnchorKeys.OPS_MODULE_SWITCH, switchMethod,
+                moduleSwitch(module, f));
     }
 
     /** 活动打开入口：3 参与 4 参重载都拦截，不执行原方法。 */
-    private static void installOpenActivities(XposedModule module, Feature f, ClassLoader cl) {
-        Class<?> service = HookKit.findClass(module, f, cl, ACTIVITIES_SERVICE);
-        Class<?> page = HookKit.findClass(module, f, cl, ABSTRACT_BASE_PAGE);
-        if (service == null || page == null) {
-            return;
-        }
-        Method open3 = HookKit.findMethod(module, f, service,
-                "openOpetationsActivities", page, String.class, String.class);
-        HookKit.install(module, f, OPEN_3P_LABEL, open3,
-                skipOpenLogged(module, f, "3p", OPEN_3P_LABEL));
-        Method open4 = HookKit.findMethod(module, f, service,
-                "openOpetationsActivities", page, String.class, String.class, boolean.class);
-        HookKit.install(module, f, OPEN_4P_LABEL, open4,
-                skipOpenLogged(module, f, "4p", OPEN_4P_LABEL));
+    private static void installOpenActivities(XposedModule module, Feature f,
+                                              AnchorTable anchors) {
+        Method open3 = anchors.method(AnchorKeys.OPS_ACTIVITY_OPEN_3P);
+        HookKit.install(module, f, AnchorKeys.OPS_ACTIVITY_OPEN_3P, open3,
+                skipOpenLogged(module, f, "3p", AnchorKeys.OPS_ACTIVITY_OPEN_3P));
+
+        Method open4 = anchors.method(AnchorKeys.OPS_ACTIVITY_OPEN_4P);
+        HookKit.install(module, f, AnchorKeys.OPS_ACTIVITY_OPEN_4P, open4,
+                skipOpenLogged(module, f, "4p", AnchorKeys.OPS_ACTIVITY_OPEN_4P));
     }
 
     /**
@@ -102,7 +90,7 @@ final class OpsActivityHooks {
      */
     private static XposedInterface.Hooker moduleSwitch(final XposedModule module,
                                                        final Feature f) {
-        final String hitLine = f.id + " hit " + SWITCH_LABEL;
+        final String hitLine = f.id + " hit " + AnchorKeys.OPS_MODULE_SWITCH;
         return new XposedInterface.Hooker() {
             @Override
             public Object intercept(XposedInterface.Chain chain) throws Throwable {
@@ -113,7 +101,8 @@ final class OpsActivityHooks {
                     hitQuiet(module, f, hitLine);
                     return Boolean.FALSE;
                 } catch (Throwable t) {
-                    HookKit.error(module, f.id + " intercept error " + SWITCH_LABEL, t);
+                    HookKit.error(module, f.id + " intercept error "
+                            + AnchorKeys.OPS_MODULE_SWITCH, t);
                     return chain.proceed();
                 }
             }

@@ -36,7 +36,9 @@ final class Batch6Probe {
 
     private static final String[] TARGETS = {
             "com.autonavi.minimap.bundle.msgbox.util.MessageBoxManager",
+            // anchor-allowlist: DEBUG_PROBE=false 的临时真机探针，不参与正式挂载；该候选类无锚点条目
             "com.autonavi.minimap.bundle.msgbox.impl.MsgboxService",
+            // anchor-allowlist: DEBUG_PROBE=false 的临时真机探针，不参与正式挂载；该候选类无锚点条目
             "com.autonavi.bundle.msgbox.ajx.ModuleMessageBox"
     };
 

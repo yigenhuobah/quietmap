@@ -6,6 +6,7 @@ import androidx.annotation.Nullable;
 
 import com.quietmap.app.Feature;
 import com.quietmap.app.HookState;
+import com.quietmap.app.anchor.AnchorTable;
 import com.quietmap.app.dexkit.DexKitLocator;
 
 import java.lang.reflect.Method;
@@ -67,6 +68,21 @@ final class HookKit {
             return;
         }
         module.log(Log.ERROR, TAG, msg, t);
+    }
+
+    /**
+     * 统一锚点表加载口：失败时记 WARN + skip，调用方返回后由
+     * {@link Hooks#markCriticalIfNoMount} 判定整体失效。hook 不再直接持有
+     * 宿主类名/方法名，定位全部交给 AnchorTable。
+     */
+    @Nullable
+    static AnchorTable loadAnchors(XposedModule module, Feature f, ClassLoader cl) {
+        AnchorTable anchors = AnchorTable.load(cl);
+        if (anchors == null) {
+            warn(module, f.id + " anchors.json unavailable, skip");
+            HookState.markNotFound(f, "anchors.json 不可用");
+        }
+        return anchors;
     }
 
     @Nullable
