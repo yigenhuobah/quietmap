@@ -120,6 +120,11 @@
     </PreferenceCategory>
 
     <Preference
+        android:key="reset_defaults"
+        android:title="@string/reset_defaults_title"
+        android:summary="@string/reset_defaults_summary" />
+
+    <Preference
         android:key="footer"
         android:layout="@layout/preference_footer"
         android:selectable="false" />

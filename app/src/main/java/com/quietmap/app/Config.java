@@ -21,9 +21,16 @@ public final class Config {
 
     public static final String GROUP = "config";
 
+    /** 配置结构版本键：与布尔开关同住 "config" group，单独一个 int 键。 */
+    public static final String KEY_CONFIG_VERSION = "config_version";
+    /** 当前模块能理解的配置版本；读到更高版本时按兼容模式继续加载。 */
+    public static final int CURRENT_CONFIG_VERSION = 1;
+
     private static final String TAG = "QuietMap";
 
     private final Map<Feature, Boolean> mEnabled = new EnumMap<>(Feature.class);
+    /** 配置里记录的版本；缺键/读取失败时等于 {@link #CURRENT_CONFIG_VERSION}。 */
+    private int mConfigVersion = CURRENT_CONFIG_VERSION;
 
     private Config() {
         for (Feature f : Feature.values()) {
@@ -75,6 +82,58 @@ public final class Config {
     }
 
     /**
+     * 配置版本读取器：与布尔开关完全独立，类型错误/读取异常由
+     * {@link #readConfigVersion} 兜住，不影响任何开关。
+     */
+    @FunctionalInterface
+    interface IntGetter {
+        int get(String key, int def) throws Throwable;
+    }
+
+    /** 高版本配置告警：只在 stored > {@link #CURRENT_CONFIG_VERSION} 时调用一次。 */
+    @FunctionalInterface
+    interface VersionWarning {
+        void warn(int storedVersion);
+    }
+
+    /**
+     * 读取 config_version：缺键或读取异常回落到当前版本；类型错误等异常
+     * 通过 {@code readWarning} 告警一次（key + 原始异常），高版本则通过
+     * {@code versionWarning} 告警一次，随后继续按现有键加载（兼容模式）。
+     */
+    static int readConfigVersion(IntGetter getter, VersionWarning warning) {
+        return readConfigVersion(getter, warning, null);
+    }
+
+    static int readConfigVersion(IntGetter getter, VersionWarning warning,
+                                 Warning readWarning) {
+        if (getter == null) {
+            return CURRENT_CONFIG_VERSION;
+        }
+        int stored;
+        try {
+            stored = getter.get(KEY_CONFIG_VERSION, CURRENT_CONFIG_VERSION);
+        } catch (Throwable t) {
+            if (readWarning != null) {
+                try {
+                    readWarning.warn(KEY_CONFIG_VERSION, t);
+                } catch (Throwable ignored) {
+                    // 告警出口自身失败不能影响配置加载。
+                }
+            }
+            return CURRENT_CONFIG_VERSION;
+        }
+        if (stored > CURRENT_CONFIG_VERSION && warning != null) {
+            try {
+                warning.warn(stored);
+            } catch (Throwable ignored) {
+                // 告警出口自身失败不能影响配置加载。
+            }
+        }
+        return stored;
+    }
+
+    /**
      * 逐 key 读取 remote 开关：单个 key 抛异常只跳过该 key（调用方回退
      * defaultEnabled），整次加载记录一次 warning，其余 key 继续。
      * 返回的 Map 可能缺少失败键；任何异常都不向外抛。
@@ -108,16 +167,37 @@ public final class Config {
      * 任何异常都不向外抛。
      */
     static Config load(boolean remote, RemoteReader reader) {
+        return load(remote, reader, null, null, null);
+    }
+
+    /**
+     * 带 config_version 的加载：版本读取与布尔开关各自 try/catch，
+     * 版本坏值/高版本不会让任何一个开关失效。
+     */
+    static Config load(boolean remote, RemoteReader reader, IntGetter versionGetter,
+                       VersionWarning versionWarning) {
+        return load(remote, reader, versionGetter, versionWarning, null);
+    }
+
+    /**
+     * 完整加载入口：额外接收版本读取失败告警（key + 原始异常），
+     * 让生产端能像布尔键一样记录 WARN。
+     */
+    static Config load(boolean remote, RemoteReader reader, IntGetter versionGetter,
+                       VersionWarning versionWarning, Warning versionReadWarning) {
         if (!remote) {
             return new Config();
         }
-        Map<String, Boolean> overrides;
+        Map<String, Boolean> overrides = null;
         try {
             overrides = reader == null ? null : reader.read();
-        } catch (Throwable t) {
-            return new Config();
+        } catch (Throwable ignored) {
+            // 整份读取失败：全部回默认值，版本仍独立读取。
         }
-        return fromOverrides(overrides);
+        Config config = fromOverrides(overrides);
+        config.mConfigVersion = readConfigVersion(
+                versionGetter, versionWarning, versionReadWarning);
+        return config;
     }
 
     public static Config load(XposedModule module) {
@@ -133,23 +213,34 @@ public final class Config {
             module.log(Log.WARN, TAG, "no PROP_CAP_REMOTE: use built-in defaults");
             return new Config();
         }
-        return load(true, () -> {
-            SharedPreferences sp;
-            try {
-                sp = module.getRemotePreferences(GROUP);
-            } catch (Throwable t) {
-                module.log(Log.WARN, TAG, "remote prefs unavailable: use built-in defaults", t);
-                throw t;
-            }
-            if (sp == null) {
-                IllegalStateException e = new IllegalStateException("remote prefs is null");
-                module.log(Log.WARN, TAG, "remote prefs unavailable: use built-in defaults", e);
-                throw e;
-            }
-            return readOverrides(sp::getBoolean, (key, t) ->
-                    module.log(Log.WARN, TAG, "remote pref read failed key=" + key
-                            + ": use built-in default", t));
-        });
+        SharedPreferences sp;
+        try {
+            sp = module.getRemotePreferences(GROUP);
+        } catch (Throwable t) {
+            module.log(Log.WARN, TAG, "remote prefs unavailable: use built-in defaults", t);
+            return new Config();
+        }
+        if (sp == null) {
+            module.log(Log.WARN, TAG, "remote prefs unavailable: use built-in defaults",
+                    new IllegalStateException("remote prefs is null"));
+            return new Config();
+        }
+        return load(true,
+                () -> readOverrides(sp::getBoolean, (key, t) ->
+                        module.log(Log.WARN, TAG, "remote pref read failed key=" + key
+                                + ": use built-in default", t)),
+                sp::getInt,
+                stored -> module.log(Log.WARN, TAG, "配置版本 v" + stored
+                        + " 高于模块支持 v" + CURRENT_CONFIG_VERSION + "，按兼容模式继续"),
+                (key, t) -> module.log(Log.WARN, TAG,
+                        "remote pref read failed key=" + key
+                                + " (" + t.getClass().getName() + ": " + t.getMessage()
+                                + "): use built-in default v" + CURRENT_CONFIG_VERSION, t));
+    }
+
+    /** 配置中记录的版本；缺键或读取失败时等于 {@link #CURRENT_CONFIG_VERSION}。 */
+    int version() {
+        return mConfigVersion;
     }
 
     public boolean enabled(Feature f) {

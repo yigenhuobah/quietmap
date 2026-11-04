@@ -10,12 +10,24 @@ permissions:
   contents: read
 
 jobs:
-  unit-test-and-lint:
+  preflight:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # 模块通过复合构建引用共享 core；CI 把 xposed-core 检出到工作区并显式
+      # 覆盖路径。前置条件：yigenhuobah/xposed-core 必须已公开，否则本 job
+      # 会在 checkout 步骤明确失败（不会静默跑一套未共享的实现）。
+      XPOSED_CORE_PATH: ${{ github.workspace }}/xposed-core
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Checkout xposed-core
+        uses: actions/checkout@v4
+        with:
+          repository: yigenhuobah/xposed-core
+          path: xposed-core
+          ref: main
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -53,8 +65,13 @@ jobs:
           fi
           ls -l "$SDK_ROOT/platforms"
 
-      - name: Unit tests, coverage and lint
-        run: ./gradlew :app:testDebugUnitTest :app:jacocoTestReport :app:lintDebug --no-daemon
+      # preflight 是发布前同一套门禁：JDK/SDK、版本号与 README/CHANGELOG 一致、
+      # 单测、lint。CI 不再单独重复一遍 gradle 命令，避免两套门禁漂移。
+      - name: Preflight (versions, CHANGELOG, tests, lint)
+        run: bash tools/preflight.sh
+
+      - name: Coverage report
+        run: ./gradlew :app:jacocoTestReport --no-daemon
 
       - name: Upload test, lint and JaCoCo reports
         if: always()

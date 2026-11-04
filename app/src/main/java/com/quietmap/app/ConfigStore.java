@@ -3,13 +3,18 @@ package com.quietmap.app;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 import io.github.yigenhuobah.core.ConfigPolicy;
 
@@ -40,6 +45,24 @@ final class ConfigStore {
                 return t;
             });
 
+    /**
+     * 恢复默认的回调必须回主线程；没有 Looper 的纯 JVM 单测退化为当前线程。
+     * 写线程本身绝不直接碰 UI。
+     */
+    private static final Executor MAIN_CALLBACK_EXECUTOR = command -> {
+        try {
+            Looper main = Looper.getMainLooper();
+            if (main == null) {
+                command.run();
+                return;
+            }
+            new Handler(main).post(command);
+        } catch (Throwable t) {
+            logW("main thread callback unavailable", t);
+            command.run();
+        }
+    };
+
     /** 单个存储的读写抽象；单测可注入纯 JVM 实现。 */
     interface Store {
         /** 返回 null 表示 key 不存在或读取失败。 */
@@ -47,6 +70,36 @@ final class ConfigStore {
 
         /** 只有真正 commit 成功才返回 true。 */
         boolean put(String key, boolean value);
+
+        /** 返回 null 表示 key 不存在、类型不匹配或读取失败。 */
+        default Integer getInt(String key) {
+            return null;
+        }
+
+        /** 只有真正 commit 成功才返回 true；默认替身不支持 int 键。 */
+        default boolean putInt(String key, int value) {
+            return false;
+        }
+
+        /**
+         * 单次 editor/commit 写入全部 Feature 默认值 + config_version。
+         * 必须由实现保证原子性；默认实现直接抛异常，避免未来某个 Store
+         * 退化成 N 笔 commit 留下写到一半的混合状态。
+         */
+        default boolean commitDefaults() {
+            throw new UnsupportedOperationException(
+                    "commitDefaults() must be atomic: implement it with a single editor/commit");
+        }
+
+        /**
+         * 恢复默认 commit 之后用于回读校验的读取视图。
+         * 生产实现必须重新获取一份 remote preferences handle，避免在同一份
+         * 内存 map 上回读（commit 失败时框架可能已乐观更新内存）。
+         * 测试替身/无法重新获取时默认返回自身。
+         */
+        default Store readbackStore() {
+            return this;
+        }
     }
 
     /** 异步写入结果；在后台写线程回调。 */
@@ -54,8 +107,16 @@ final class ConfigStore {
         void onResult(boolean committed);
     }
 
+    /** 恢复默认结果；与 {@link WriteCallback} 不同，固定投递到主线程。 */
+    interface ResetCallback {
+        void onResult(boolean success);
+    }
+
     private final Store mNewStore;
     private final boolean mRemote;
+    private final Executor mCallbackExecutor;
+    /** 成功恢复默认会递增，令重置前的切换写入/失败记忆全部作废。 */
+    private final AtomicInteger mResetGeneration = new AtomicInteger();
 
     /**
      * commit 失败后，框架的 RemotePreferences 内存 map 已被乐观更新（doUpdate 先于
@@ -85,13 +146,24 @@ final class ConfigStore {
         }
 
         mRemote = remote != null;
-        mNewStore = prefsStore(remote != null ? remote : local);
+        // remote 写入的回读必须重新向框架要一份 handle，不能复用构造时那份
+        // 可能已被乐观更新的内存视图；local 不走恢复默认，无需刷新器。
+        mNewStore = remote != null
+                ? prefsStore(remote, () -> ServiceBridge.remotePreferences(Config.GROUP))
+                : prefsStore(local);
+        mCallbackExecutor = MAIN_CALLBACK_EXECUTOR;
     }
 
     /** 纯 JVM 测试入口：注入存储与 remote 可用性。 */
     ConfigStore(Store newStore, boolean remote) {
+        this(newStore, remote, MAIN_CALLBACK_EXECUTOR);
+    }
+
+    /** 纯 JVM 测试入口：额外注入回调执行器，避免依赖 Android 主线程。 */
+    ConfigStore(Store newStore, boolean remote, Executor callbackExecutor) {
         mNewStore = newStore;
         mRemote = remote;
+        mCallbackExecutor = callbackExecutor != null ? callbackExecutor : MAIN_CALLBACK_EXECUTOR;
     }
 
     /** true = 写的是框架存储，目标进程能读到。 */
@@ -121,6 +193,7 @@ final class ConfigStore {
             logW("config write rejected: remote prefs unavailable: " + key, null);
             return false;
         }
+        final int resetGeneration = mResetGeneration.get();
         try {
             WRITE_EXECUTOR.execute(() -> {
                 // 失败回滚必须用“最近一次确认落盘的值”。该 key 已有过失败记录时，
@@ -144,12 +217,17 @@ final class ConfigStore {
                     mCommittedFallback.remove(key);
                     mCommittedAbsent.remove(key);
                 } else {
-                    if (before != null) {
-                        mCommittedFallback.put(key, before);
-                        mCommittedAbsent.remove(key);
-                    } else {
-                        mCommittedFallback.remove(key);
-                        mCommittedAbsent.add(key);
+                    // 恢复默认成功后旧失败记忆已被清空且代次递增：这笔重置前的
+                    // 写入失败不得再把旧值写回失败记忆，否则下一次 refresh 会把
+                    // 重置后的默认值覆盖成重置前的值。
+                    if (resetGeneration == mResetGeneration.get()) {
+                        if (before != null) {
+                            mCommittedFallback.put(key, before);
+                            mCommittedAbsent.remove(key);
+                        } else {
+                            mCommittedFallback.remove(key);
+                            mCommittedAbsent.add(key);
+                        }
                     }
                     logW("config write not committed: " + key, null);
                 }
@@ -169,12 +247,114 @@ final class ConfigStore {
     }
 
     /**
+     * 异步恢复默认：remote 不可用时直接回调 false 且不写任何存储。
+     * 后台写线程用一次 editor/commit 写入 22 个 Feature 默认值 +
+     * config_version，提交后逐键回读校验；全部匹配才回调 true。
+     * 回调固定投递到主线程（见 {@link #mCallbackExecutor}）。
+     *
+     * @return 任务是否已提交到写线程；remote 不可用/执行器拒绝为 false，
+     *         此时回调也会收到 false。
+     */
+    boolean resetToDefaults(ResetCallback callback) {
+        boolean accepted = ConfigPolicy.accepted(ConfigPolicy.decide(mRemote));
+        if (!accepted || mNewStore == null) {
+            logW("config reset rejected: remote prefs unavailable", null);
+            deliverResetResult(callback, false);
+            return false;
+        }
+        try {
+            WRITE_EXECUTOR.execute(() -> {
+                boolean committed = false;
+                try {
+                    // 不用 Editor.clear()：显式 put 所有键即可，且不会误伤同 group
+                    // 之外/未来新增的无关键。
+                    committed = mNewStore.commitDefaults();
+                } catch (Throwable t) {
+                    logW("config reset failed", t);
+                }
+                boolean success = false;
+                if (committed) {
+                    // 回读必须尽量走 commit 之后重新获取的 handle；复用同一份
+                    // SharedPreferences 的内存 map 会把乐观更新误当成已落盘。
+                    success = verifyDefaults(readbackStoreQuietly(mNewStore));
+                }
+                if (success) {
+                    // 旧失败记忆属于重置前的配置，必须清掉；代次递增让重置前
+                    // 已排队的切换写入失败记忆与 UI 回调全部作废。
+                    mCommittedFallback.clear();
+                    mCommittedAbsent.clear();
+                    mResetGeneration.incrementAndGet();
+                } else {
+                    logW("config reset not committed or read-back mismatch", null);
+                }
+                deliverResetResult(callback, success);
+            });
+            return true;
+        } catch (Throwable t) {
+            logW("config reset submit failed", t);
+            deliverResetResult(callback, false);
+            return false;
+        }
+    }
+
+    /** 恢复默认成功会递增；单测用它验证重置前的写入代次已作废。 */
+    int resetGeneration() {
+        return mResetGeneration.get();
+    }
+
+    /**
      * 纯决策：store 缺失或 service 换绑时必须重建。
      * 复用条件由 core.ConfigPolicy 统一：同一 service 实例内 remote preferences
      * 不变，可以复用；换绑后继续使用会指向已失效的 binder。
      */
     static boolean needsRebuild(boolean hasStore, Object cachedService, Object currentService) {
         return !ConfigPolicy.reuseStore(hasStore, cachedService, currentService);
+    }
+
+    /** 取回读视图；刷新失败时退回当前 store（残余限制见 prefsStore.readbackStore）。 */
+    private static Store readbackStoreQuietly(Store store) {
+        if (store == null) {
+            return null;
+        }
+        try {
+            Store fresh = store.readbackStore();
+            return fresh != null ? fresh : store;
+        } catch (Throwable t) {
+            logW("config read-back handle unavailable", t);
+            return store;
+        }
+    }
+
+    /** 回读校验：所有 Feature 都等于编译期默认值且 config_version 匹配。 */
+    private static boolean verifyDefaults(Store store) {
+        for (Feature f : Feature.values()) {
+            Boolean committed = readQuietly(store, f.key);
+            if (committed == null || committed != f.defaultEnabled) {
+                return false;
+            }
+        }
+        Integer version = readIntQuietly(store, Config.KEY_CONFIG_VERSION);
+        return version != null && version == Config.CURRENT_CONFIG_VERSION;
+    }
+
+    /** 恢复默认回调投递；回调自身异常不得影响写线程。 */
+    private void deliverResetResult(ResetCallback callback, boolean success) {
+        if (callback == null) {
+            return;
+        }
+        Runnable delivery = () -> {
+            try {
+                callback.onResult(success);
+            } catch (Throwable t) {
+                logW("config reset callback failed", t);
+            }
+        };
+        try {
+            mCallbackExecutor.execute(delivery);
+        } catch (Throwable t) {
+            logW("config reset callback dispatch failed", t);
+            delivery.run();
+        }
     }
 
     private static Boolean readQuietly(Store store, String key) {
@@ -185,6 +365,18 @@ final class ConfigStore {
             return store.get(key);
         } catch (Throwable t) {
             logW("config read failed: " + key, t);
+            return null;
+        }
+    }
+
+    private static Integer readIntQuietly(Store store, String key) {
+        if (store == null) {
+            return null;
+        }
+        try {
+            return store.getInt(key);
+        } catch (Throwable t) {
+            logW("config int read failed: " + key, t);
             return null;
         }
     }
@@ -201,11 +393,39 @@ final class ConfigStore {
         return readQuietly(mNewStore, key);
     }
 
-    private static Store prefsStore(SharedPreferences prefs) {
+    static Store prefsStore(SharedPreferences prefs) {
+        return prefsStore(prefs, null);
+    }
+
+    /**
+     * @param refresher commit 后重新获取 remote preferences 的入口；null 表示
+     *                  该存储不需要/不支持刷新（本地存储、测试替身）。
+     */
+    static Store prefsStore(SharedPreferences prefs, Supplier<SharedPreferences> refresher) {
         if (prefs == null) {
             return null;
         }
         return new Store() {
+            @Override
+            public Store readbackStore() {
+                if (refresher == null) {
+                    return this;
+                }
+                SharedPreferences fresh = null;
+                try {
+                    fresh = refresher.get();
+                } catch (Throwable t) {
+                    logW("prefs read-back handle unavailable", t);
+                }
+                if (fresh == null || fresh == prefs) {
+                    // 残余限制：框架可能按 group 缓存同一个 SharedPreferences 实例，
+                    // 或 service 在 commit 后断开；此时无法绕开其内存 map，回读仍可能
+                    // 看到 commit 乐观更新后的值。能拿到新 handle 时一定用新 handle。
+                    return this;
+                }
+                return prefsStore(fresh, refresher);
+            }
+
             @Override
             public Boolean get(String key) {
                 try {
@@ -216,15 +436,58 @@ final class ConfigStore {
                 }
             }
 
+            @Override
+            public Integer getInt(String key) {
+                try {
+                    return prefs.contains(key) ? prefs.getInt(key, 0) : null;
+                } catch (Throwable t) {
+                    logW("prefs int read failed: " + key, t);
+                    return null;
+                }
+            }
+
             @SuppressLint("ApplySharedPref")
             @Override
             public boolean put(String key, boolean value) {
                 try {
                     // commit 的真实返回值是 remote 写入是否成功的唯一可靠信号。
+                    // config_version 与开关放在同一笔 editor/commit 里，避免只写成一半。
                     // 调用方已在后台线程，不会阻塞主线程。
-                    return prefs.edit().putBoolean(key, value).commit();
+                    return prefs.edit()
+                            .putBoolean(key, value)
+                            .putInt(Config.KEY_CONFIG_VERSION, Config.CURRENT_CONFIG_VERSION)
+                            .commit();
                 } catch (Throwable t) {
                     logW("prefs write failed: " + key, t);
+                    return false;
+                }
+            }
+
+            @SuppressLint("ApplySharedPref")
+            @Override
+            public boolean putInt(String key, int value) {
+                try {
+                    return prefs.edit().putInt(key, value).commit();
+                } catch (Throwable t) {
+                    logW("prefs int write failed: " + key, t);
+                    return false;
+                }
+            }
+
+            @SuppressLint("ApplySharedPref")
+            @Override
+            public boolean commitDefaults() {
+                try {
+                    // 一次 editor/commit 复现全新安装状态：22 个开关默认值 + 版本。
+                    // 不使用 clear()，避免清掉同 group 里未来新增或无关的键。
+                    SharedPreferences.Editor editor = prefs.edit();
+                    for (Feature f : Feature.values()) {
+                        editor.putBoolean(f.key, f.defaultEnabled);
+                    }
+                    editor.putInt(Config.KEY_CONFIG_VERSION, Config.CURRENT_CONFIG_VERSION);
+                    return editor.commit();
+                } catch (Throwable t) {
+                    logW("prefs reset failed", t);
                     return false;
                 }
             }

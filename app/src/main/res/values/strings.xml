@@ -135,6 +135,15 @@
     <string name="about_hide_icon_toast_shown">桌面图标已恢复</string>
     <string name="about_hide_icon_failed">修改桌面图标失败，请重试</string>
 
+    <!-- 恢复默认 -->
+    <string name="reset_defaults_title">恢复默认</string>
+    <string name="reset_defaults_summary">所有开关回到默认值</string>
+    <string name="reset_defaults_dialog_message">恢复默认设置？所有开关将回到默认值。</string>
+    <string name="reset_defaults_cancel">取消</string>
+    <string name="reset_defaults_confirm">恢复默认</string>
+    <string name="reset_defaults_success">已恢复默认设置</string>
+    <string name="reset_defaults_failure">恢复默认失败：无法写入配置</string>
+
     <!-- 动作与提示 -->
     <string name="action_write_failed">写入失败：开关未保存。请确认框架已连接</string>
     <string name="action_open_failed">无法打开链接，请检查浏览器</string>

@@ -2,11 +2,14 @@ package com.quietmap.app;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -125,5 +128,98 @@ public class ConfigTest {
                 c.enabled(Feature.SPLASH_REQUEST));
         assertFalse("正常读取的覆盖值必须保留", c.enabled(Feature.SPLASH_SHAKE));
         assertEquals("多个 key 失败也只告警一次", 1, warnings[0]);
+    }
+
+    /** config_version 缺键：按当前版本 1 处理，不告警。 */
+    @Test
+    public void absentConfigVersionDefaultsToCurrent() {
+        List<Integer> warned = new ArrayList<>();
+        Config c = Config.load(true, () -> Collections.emptyMap(),
+                (key, def) -> def, warned::add);
+
+        assertEquals("config_version", Config.KEY_CONFIG_VERSION);
+        assertEquals(1, Config.CURRENT_CONFIG_VERSION);
+        assertEquals("缺键必须回落到当前版本",
+                Config.CURRENT_CONFIG_VERSION, c.version());
+        assertTrue("缺键不是高版本，不应告警", warned.isEmpty());
+    }
+
+    /** 存储版本 2 > 模块支持 1：不抛异常、只告警一次、其余开关照常生效。 */
+    @Test
+    public void futureConfigVersionLoadsCompatiblyAndKeepsOtherKeys() {
+        List<Integer> warned = new ArrayList<>();
+        Map<String, Boolean> overrides = new HashMap<>();
+        overrides.put(Feature.SPLASH_GATE.key, false);
+        overrides.put(Feature.BG_AWAKEN_REPORT.key, true);
+
+        Config c = Config.load(true, () -> overrides,
+                (key, def) -> Config.KEY_CONFIG_VERSION.equals(key) ? 2 : def,
+                warned::add);
+
+        assertEquals("高版本仍要记录，便于诊断", 2, c.version());
+        assertEquals("高版本只告警一次", Collections.singletonList(2), warned);
+        assertFalse("高版本不能影响已有开关", c.enabled(Feature.SPLASH_GATE));
+        assertTrue("高版本不能影响已有开关", c.enabled(Feature.BG_AWAKEN_REPORT));
+        for (Feature f : Feature.values()) {
+            if (f == Feature.SPLASH_GATE || f == Feature.BG_AWAKEN_REPORT) {
+                continue;
+            }
+            assertEquals("高版本下 " + f.key + " 应保持默认值",
+                    f.defaultEnabled, c.enabled(f));
+        }
+    }
+
+    /** 当前版本不告警。 */
+    @Test
+    public void currentConfigVersionDoesNotWarn() {
+        List<Integer> warned = new ArrayList<>();
+        Config c = Config.load(true, () -> Collections.emptyMap(),
+                (key, def) -> Config.CURRENT_CONFIG_VERSION, warned::add);
+
+        assertEquals(Config.CURRENT_CONFIG_VERSION, c.version());
+        assertTrue("当前版本不应告警", warned.isEmpty());
+    }
+
+    /** config_version 类型错误/读取异常：只回退版本并告警一次，开关照常读取。 */
+    @Test
+    public void configVersionReadFailureWarnsOnceAndKeepsSwitches() {
+        Map<String, Boolean> overrides = new HashMap<>();
+        overrides.put(Feature.SPLASH_GATE.key, false);
+        List<String> warnedKeys = new ArrayList<>();
+        List<Throwable> warnedErrors = new ArrayList<>();
+
+        Config c = Config.load(true, () -> overrides, (key, def) -> {
+            throw new ClassCastException("config_version is not an int");
+        }, version -> {
+            throw new AssertionError("读取失败不应触发高版本告警");
+        }, (key, t) -> {
+            warnedKeys.add(key);
+            warnedErrors.add(t);
+        });
+
+        assertEquals(Config.CURRENT_CONFIG_VERSION, c.version());
+        assertFalse("版本读取失败不能影响开关", c.enabled(Feature.SPLASH_GATE));
+        assertEquals(Feature.BG_MSG_FETCH.defaultEnabled,
+                c.enabled(Feature.BG_MSG_FETCH));
+        assertEquals("坏版本只告警一次", 1, warnedKeys.size());
+        assertEquals("告警 key 必须是 config_version",
+                Config.KEY_CONFIG_VERSION, warnedKeys.get(0));
+        assertEquals(1, warnedErrors.size());
+        assertTrue("必须带原始异常", warnedErrors.get(0) instanceof ClassCastException);
+        assertEquals("config_version is not an int",
+                warnedErrors.get(0).getMessage());
+    }
+
+    /** remote=false：不读取版本，直接使用当前版本与默认开关。 */
+    @Test
+    public void remoteDisabledDoesNotReadVersion() {
+        Config c = Config.load(false, Collections::emptyMap, (key, def) -> 9, version -> {
+            throw new AssertionError("remote=false 不应读取版本");
+        });
+
+        assertEquals(Config.CURRENT_CONFIG_VERSION, c.version());
+        for (Feature f : Feature.values()) {
+            assertEquals(f.defaultEnabled, c.enabled(f));
+        }
     }
 }

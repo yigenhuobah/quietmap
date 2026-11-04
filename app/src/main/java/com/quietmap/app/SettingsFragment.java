@@ -8,6 +8,7 @@ import android.os.SystemClock;
 import android.util.Log;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.preference.Preference;
 import androidx.preference.PreferenceFragmentCompat;
 
@@ -81,6 +82,13 @@ public class SettingsFragment extends PreferenceFragmentCompat {
      * 旧写入的失败回调不得覆盖用户随后拨动的开关值。
      */
     private final Map<String, Integer> mWriteGeneration = new HashMap<>();
+    /**
+     * 恢复默认代次：重置成功即递增，重置前在途的开关失败回调不得再回滚 UI，
+     * 否则会把刚恢复的默认值又拨回重置前的旧值。
+     */
+    private int mResetEpoch;
+    /** 恢复默认任务进行中：入口置灰，避免重复提交事务。 */
+    private boolean mResetInFlight;
     /** 失败功能数缓存：-1 表示尚未读取。 */
     private volatile int mFailedCount = -1;
     private volatile long mFailedCountAt;
@@ -92,6 +100,7 @@ public class SettingsFragment extends PreferenceFragmentCompat {
         setPreferencesFromResource(R.xml.prefs, rootKey);
         bindFeatures();
         bindPages();
+        bindResetDefaults();
         refresh();
     }
 
@@ -157,6 +166,11 @@ public class SettingsFragment extends PreferenceFragmentCompat {
      * commit 失败再回主线程 Toast 并把开关拨回旧值。
      */
     private boolean handleToggle(Feature f, boolean next) {
+        if (mResetInFlight) {
+            // 恢复默认事务进行中：拒绝新的开关写入，避免重置后又被一笔
+            // 迟到的切换覆盖；返回 false 让 Preference 保持原值。
+            return false;
+        }
         ConfigStore store = mStore;
         if (store == null || !store.remote()) {
             Toast.makeText(requireContext(), R.string.action_write_failed,
@@ -171,6 +185,8 @@ public class SettingsFragment extends PreferenceFragmentCompat {
         }
 
         final Activity host = getActivity();
+        // 恢复默认代次：重置成功后，重置前的失败回调不得再回滚刚恢复的默认值。
+        final int resetEpoch = mResetEpoch;
         // 写入代次：同一 key 的失败回调只有在仍是最新一笔写入时才允许回滚，
         // 否则旧失败的回滚会覆盖后续（可能已成功）写入的 UI 状态。
         // 代次只在写入成功排队后生效（见下方 put），被拒绝的写入不得让旧回调失效。
@@ -183,6 +199,10 @@ public class SettingsFragment extends PreferenceFragmentCompat {
             }
             host.runOnUiThread(() -> {
                 if (!isAdded() || getActivity() != host) {
+                    return;
+                }
+                if (resetEpoch != mResetEpoch) {
+                    // 恢复默认已成功：这笔重置前的失败回调作废。
                     return;
                 }
                 Integer latest = mWriteGeneration.get(f.key);
@@ -226,6 +246,98 @@ public class SettingsFragment extends PreferenceFragmentCompat {
         }
     }
 
+    /** 恢复默认入口：确认后提交一次事务，成功/失败都在主线程反馈。 */
+    private void bindResetDefaults() {
+        Preference reset = findPreference("reset_defaults");
+        if (reset == null) {
+            return;
+        }
+        // 配置读取完成前不可点；remote 可用性由 applyValues 决定。
+        reset.setEnabled(false);
+        reset.setOnPreferenceClickListener(pref -> {
+            showResetDialog();
+            return true;
+        });
+    }
+
+    private void showResetDialog() {
+        if (mResetInFlight) {
+            return;
+        }
+        ConfigStore store = mStore;
+        if (store == null || !store.remote()) {
+            Toast.makeText(requireContext(), R.string.reset_defaults_failure,
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        new AlertDialog.Builder(requireContext())
+                .setTitle(R.string.reset_defaults_title)
+                .setMessage(R.string.reset_defaults_dialog_message)
+                .setNegativeButton(R.string.reset_defaults_cancel, null)
+                .setPositiveButton(R.string.reset_defaults_confirm,
+                        (dialog, which) -> performReset())
+                .show();
+    }
+
+    private void performReset() {
+        ConfigStore store = mStore;
+        if (mResetInFlight) {
+            return;
+        }
+        if (store == null || !store.remote()) {
+            Toast.makeText(requireContext(), R.string.reset_defaults_failure,
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final Activity host = getActivity();
+        if (host == null) {
+            Toast.makeText(requireContext(), R.string.reset_defaults_failure,
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        mResetInFlight = true;
+        updateResetEnabled();
+        // 回调由 ConfigStore 投递到主线程，这里不再二次切线程。
+        store.resetToDefaults(success -> {
+            // 先清 guard：即使 view 已销毁/换 host，也不能让入口永久停在禁用态。
+            mResetInFlight = false;
+            if (!isAdded() || getActivity() != host) {
+                return;
+            }
+            if (success) {
+                // 重置成功：让重置前在途的开关失败回调作废，并立即把默认值上屏。
+                mResetEpoch++;
+                mWriteGeneration.clear();
+                Map<String, Boolean> defaults = new HashMap<>();
+                for (Feature f : Feature.values()) {
+                    defaults.put(f.key, f.defaultEnabled);
+                }
+                mRenderedValues.clear();
+                mRenderedValues.putAll(defaults);
+                applyValues(defaults, true);
+                Toast.makeText(requireContext(), R.string.reset_defaults_success,
+                        Toast.LENGTH_SHORT).show();
+                // 绕过 1 秒刷新节流，重新读取已提交存储（状态卡/横幅一并同步）。
+                mHasRefreshed = false;
+                refresh();
+            } else {
+                updateResetEnabled();
+                Toast.makeText(requireContext(), R.string.reset_defaults_failure,
+                        Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
+
+    /** 恢复默认入口只在 remote 可写且没有重置任务在途时可用。 */
+    private void updateResetEnabled() {
+        Preference reset = findPreference("reset_defaults");
+        if (reset == null) {
+            return;
+        }
+        ConfigStore store = mStore;
+        reset.setEnabled(!mResetInFlight && store != null && store.remote());
+    }
+
     /** 重新读取框架状态与开关值。service 绑定/断开后由 MainActivity 调一次。 */
     void refresh() {
         if (getContext() == null) {
@@ -261,6 +373,7 @@ public class SettingsFragment extends PreferenceFragmentCompat {
             // service 刚绑定/断开或还没有 store：先置灰，后台读取完成后再按
             // remote 可用性恢复，避免这段时间里点到“改了没用”的开关。
             setSwitchesEnabled(false);
+            setResetEnabled(false);
         }
 
         if (mStoreFuture != null) {
@@ -322,6 +435,14 @@ public class SettingsFragment extends PreferenceFragmentCompat {
                 // 框架没绑定时写不进去，置灰避免“改了没用”；blocked 始终置灰。
                 sw.setEnabled(writable && !f.blocked());
             }
+        }
+        updateResetEnabled();
+    }
+
+    private void setResetEnabled(boolean enabled) {
+        Preference reset = findPreference("reset_defaults");
+        if (reset != null) {
+            reset.setEnabled(enabled);
         }
     }
 

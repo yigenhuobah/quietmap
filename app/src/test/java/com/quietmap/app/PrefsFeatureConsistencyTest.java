@@ -25,6 +25,7 @@ import static org.junit.Assert.fail;
  * 非功能 key 白名单说明（按当前 prefs.xml 实际内容）：
  * - status / warning：设置页顶部状态卡与异常横幅，由 StatusProvider 动态填充；
  * - page_*：二级页面入口（诊断、关于）；
+ * - reset_defaults：恢复默认动作入口，不映射任何 Feature key；
  * - footer：页脚说明卡片。
  * 以后新增非功能 key 必须同步这里，否则测试失败——这是故意的。
  */
@@ -35,6 +36,7 @@ public class PrefsFeatureConsistencyTest {
     private static final Set<String> EXACT_NON_FEATURE_KEYS = new HashSet<>(Arrays.asList(
             "status",
             "warning",
+            "reset_defaults",
             "footer"));
 
     private static final Pattern NON_FEATURE_PREFIX = Pattern.compile("^page_");

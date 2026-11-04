@@ -273,6 +273,13 @@ public final class AnchorTable {
                 }
             }
             JSONObject json = new JSONObject(text.toString());
+            // schemaVersion 是四模块共同契约；不认识的版本宁可整表 fail-open，
+            // 也不按旧字段猜读（字段语义可能已变）。
+            int schema = json.optInt("schemaVersion", -1);
+            if (schema != 1) {
+                Log.w(TAG, "unsupported anchors.json schemaVersion=" + schema);
+                return null;
+            }
             return new AnchorTable(json.optString("appVersion"),
                     json.optLong("versionCode"), json, loader);
         } catch (Throwable t) {
