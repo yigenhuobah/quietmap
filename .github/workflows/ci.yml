@@ -27,7 +27,7 @@ jobs:
         with:
           repository: yigenhuobah/xposed-core
           path: xposed-core
-          ref: main
+          ref: v0.1.0
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
