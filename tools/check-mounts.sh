@@ -607,7 +607,7 @@ while IFS=$'\t' read -r key full feat critical note dexkit; do
     gone=$((gone + 1))
     continue
   fi
-  mth_hit=$(count "SELECT count(*) FROM methods WHERE descriptor='$full'") || exit 3
+  mth_hit=$(count "SELECT count(*) FROM methods WHERE descriptor='$full' AND method_kind IS NOT NULL") || exit 3
   if [ "${mth_hit:-0}" = "0" ]; then
     printf '%-8s %-78s %s\n' "SIG" "${full#*->}  (类在、签名变了)" "$feat $note"
     sig=$((sig + 1))
